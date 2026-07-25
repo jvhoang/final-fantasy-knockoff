@@ -8,6 +8,8 @@ import {
   isStaticPagesHost,
   normalizeWsUrl,
   peerIdForRoom,
+  hasMultiplayerHttpServer,
+  formatMpError,
 } from '../src/net/ws-config.js';
 import { RoomManager } from '../src/net/room-manager.js';
 import fs from 'node:fs';
@@ -60,6 +62,33 @@ describe('multiplayer endpoint resolution', () => {
     assert.equal(peerIdForRoom('AB12CD'), 'ffkab12cd');
     assert.equal(peerIdForRoom('ab12cd'), 'ffkab12cd');
   });
+
+  it('formatMpError handles PeerJS-like objects', () => {
+    assert.equal(formatMpError(new Error('boom')), 'boom');
+    assert.equal(formatMpError({ type: 'network', message: 'net' }), 'net');
+    assert.equal(formatMpError({ type: 'unavailable-id' }), 'P2P error: unavailable-id');
+    assert.equal(formatMpError(null), 'Multiplayer failed');
+  });
+
+  it('hasMultiplayerHttpServer uses health endpoint', async () => {
+    const ok = await hasMultiplayerHttpServer({
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({ ok: true, name: 'Final Fantasy Knockoff' }),
+      }),
+    });
+    assert.equal(ok, true);
+    const bad = await hasMultiplayerHttpServer({
+      fetchImpl: async () => {
+        throw new Error('network');
+      },
+    });
+    assert.equal(bad, false);
+    const notOk = await hasMultiplayerHttpServer({
+      fetchImpl: async () => ({ ok: false, json: async () => ({}) }),
+    });
+    assert.equal(notOk, false);
+  });
 });
 
 describe('RoomManager preferred code (P2P)', () => {
@@ -75,11 +104,17 @@ describe('RoomManager preferred code (P2P)', () => {
 });
 
 describe('game-app multiplayer uses MultiplayerClient (not raw WS-only toast)', () => {
-  it('shipped sources wire mp-client + no bare WS failed only path', () => {
+  it('shipped sources wire mp-client + WS→P2P fallback (no bare WS failed only path)', () => {
     const app = fs.readFileSync(path.join(root, 'src/client/game-app.js'), 'utf8');
+    const client = fs.readFileSync(path.join(root, 'src/net/mp-client.js'), 'utf8');
     assert.ok(app.includes('MultiplayerClient'));
     assert.ok(app.includes('onlineCreate'));
+    assert.ok(app.includes('hasMultiplayerHttpServer'));
+    assert.ok(app.includes('formatMpError'));
     assert.ok(!app.includes("toast('WS failed')"));
+    assert.ok(client.includes('ws-fallback-p2p'));
+    assert.ok(client.includes('hasMultiplayerHttpServer'));
+    assert.ok(client.includes('_createP2pHost'));
     assert.ok(fs.existsSync(path.join(root, 'src/net/mp-client.js')));
     assert.ok(fs.existsSync(path.join(root, 'src/net/ws-config.js')));
   });

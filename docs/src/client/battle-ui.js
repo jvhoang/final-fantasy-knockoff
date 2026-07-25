@@ -3,8 +3,10 @@
  * ZOOM_MIN mirrored from arena (avoid importing Three.js here).
  */
 
-/** Must match arena.ZOOM_MIN */
-export const ZOOM_MIN_REF = 2.5;
+/** Must match arena.ZOOM_MIN (face-close capable) */
+export const ZOOM_MIN_REF = 0.65;
+/** Prior zoom floor before face-close polish */
+export const ZOOM_MIN_PRIOR_REF = 2.5;
 
 /** Prior turn-focus orthographic zoom (too far on phone). */
 export const PRIOR_TURN_FOCUS_ZOOM = 6.5;

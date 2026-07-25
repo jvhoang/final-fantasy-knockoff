@@ -10,7 +10,10 @@
   --border: #2a5a5e;
   --violet: #6b4c9a;
   --teal: #1a9b8e;
-  font-family: "Segoe UI", system-ui, sans-serif;
+  --rbx: #00a2ff;
+  --rbx-green: #00b06f;
+  --rbx-panel: rgba(18, 24, 36, 0.82);
+  font-family: "Segoe UI", "Gotham SSm", system-ui, sans-serif;
 }
 
 * {
@@ -73,6 +76,93 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
+}
+
+/* Roblox-like rounded chrome (keep materia bg on body) */
+.roblox-panel {
+  background: var(--rbx-panel);
+  border: 2px solid rgba(0, 162, 255, 0.45);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.roblox-menu-badge {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #00a2ff, #0066aa);
+  color: #fff;
+  font-weight: 900;
+  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0, 162, 255, 0.4);
+}
+
+.roblox-title {
+  text-align: center;
+  letter-spacing: 0.04em;
+  color: #fff !important;
+  text-shadow: 0 2px 0 #003d66;
+}
+
+.roblox-sub {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.roblox-btn {
+  border-radius: 10px !important;
+  font-weight: 700 !important;
+  border: 2px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.25);
+}
+
+.roblox-btn.primary,
+.btn.primary.roblox-btn {
+  background: linear-gradient(180deg, #00c878, #00a05a) !important;
+  border-color: #00804a !important;
+}
+
+.loadout-preview {
+  border-radius: 14px !important;
+  border: 2px solid rgba(0, 162, 255, 0.35) !important;
+  background: linear-gradient(180deg, #2a3548, #1a2230) !important;
+  box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.35);
+}
+
+/* Lower-left Confirm FAB — always reachable on phone */
+.confirm-fab {
+  position: absolute;
+  left: 0.5rem;
+  bottom: 0.55rem;
+  z-index: 25;
+  pointer-events: none;
+}
+
+.confirm-fab.hidden {
+  display: none !important;
+}
+
+.confirm-fab-btn {
+  pointer-events: auto;
+  min-width: 7.5rem;
+  padding: 0.7rem 1rem !important;
+  font-size: 0.95rem !important;
+  font-weight: 800 !important;
+  border-radius: 14px !important;
+  background: rgba(0, 176, 111, 0.82) !important;
+  border: 2px solid rgba(255, 255, 255, 0.35) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+}
+
+.confirm-fab-btn:active {
+  transform: scale(0.97);
 }
 
 .panel.wide {

@@ -40,10 +40,11 @@ import {
   uiModeAfterSuccessfulAct,
   shouldShowActionChrome,
 } from './battle-ui.js';
+import { resolvePanelTarget, useInspectHighlightStyle } from './panel-target.js';
 import { teamLabelForViewer } from '../core/team-label.js';
 import { MSG } from '../net/protocol.js';
 import { MultiplayerClient } from '../net/mp-client.js';
-import { resolveMultiplayerEndpoint } from '../net/ws-config.js';
+import { resolveMultiplayerEndpoint, hasMultiplayerHttpServer, formatMpError } from '../net/ws-config.js';
 import { buildUnitMesh } from './unit-mesh.js';
 import * as THREE from 'three';
 
@@ -78,6 +79,7 @@ export class GameApp {
     this._hoverAoeTile = null;
     /** Pending act target awaiting confirm button */
     this._pendingActTarget = null;
+    this._prevActiveForPanel = null;
     this._buildShell();
   }
 
@@ -113,11 +115,13 @@ export class GameApp {
   showMenu() {
     this.mode = 'menu';
     this.screens.innerHTML = `
-      <section class="panel menu-panel fft-panel materia-panel">
-        <h2>Main Menu</h2>
-        <button type="button" id="btn-vs-ai" class="btn primary">vs AI Battle</button>
-        <button type="button" id="btn-online" class="btn">Online Multiplayer</button>
-        <button type="button" id="btn-loadout" class="btn">Formation (Gil Shop)</button>
+      <section class="panel menu-panel fft-panel materia-panel roblox-panel">
+        <div class="roblox-menu-badge">FFK</div>
+        <h2 class="roblox-title">Final Fantasy Knockoff</h2>
+        <p class="roblox-sub">Blocky tactics · Gil shop · 4v4 CT</p>
+        <button type="button" id="btn-vs-ai" class="btn primary roblox-btn">⚔ vs AI Battle</button>
+        <button type="button" id="btn-online" class="btn roblox-btn">🌐 Online Multiplayer</button>
+        <button type="button" id="btn-loadout" class="btn roblox-btn">👤 Formation (Gil Shop)</button>
         <p class="hint">Budget ${TEAM_GIL_BUDGET} gil · Slow sequential battle · 20+ random maps</p>
         <p class="hint water-hint">${escapeHtml(WATER_RULES.description)}</p>
       </section>
@@ -190,9 +194,9 @@ export class GameApp {
       .join('');
 
     this.screens.innerHTML = `
-      <section class="panel loadout-panel wide fft-panel loadout-sticky-layout loadout-noscroll" id="loadout-screen">
+      <section class="panel loadout-panel wide fft-panel loadout-sticky-layout loadout-noscroll roblox-panel" id="loadout-screen">
         <div class="loadout-sticky-top" id="loadout-sticky-top">
-          <h2>Formation — Gil Shop</h2>
+          <h2 class="roblox-title">Formation — Avatar Shop</h2>
           <div class="gil-bar ${budget.ok ? '' : 'over'}" id="gil-bar">
             <strong>Party Gil:</strong>
             <span id="gil-spent">${budget.spent}</span> / <span id="gil-budget">${budget.budget}</span>
@@ -486,6 +490,10 @@ export class GameApp {
               <div id="hud-actions" class="hud-block actions chrome-actions"></div>
               <div id="hud-wait-face" class="hud-block chrome-wait-face hidden"></div>
             </div>
+            <!-- Lower-left Confirm FAB — no scroll required -->
+            <div id="confirm-fab" class="confirm-fab hidden" aria-label="Confirm action">
+              <button type="button" id="btn-confirm-fab" class="btn primary confirm-fab-btn">Confirm</button>
+            </div>
           </div>
           <div id="bottom-unit-panel" class="bottom-unit-panel" aria-label="Unit status">
             <em>Active / selected unit status appears here</em>
@@ -588,14 +596,29 @@ export class GameApp {
     const logEl = this.screens.querySelector('#hud-log');
 
     const active = getUnit(this.match, this.match.activeUnitId);
+    // Bottom panel + highlight: active turn default; inspect override (clears on turn change)
+    const panel = resolvePanelTarget(
+      {
+        activeUnitId: this.match.activeUnitId,
+        inspectId: this.inspectId,
+        clearInspectOnTurnChange: true,
+      },
+      this._prevActiveForPanel
+    );
+    if (panel.nextInspectId !== this.inspectId) this.inspectId = panel.nextInspectId;
+    this._prevActiveForPanel = this.match.activeUnitId;
+
     if (this.match.phase === 'battle' && active) {
       const ch = active.charging
         ? `<br/><span class="casting">Casting ${escapeHtml(getAbility(active.charging.abilityId).name)}… (${active.charging.chargeLeft}/${active.charging.castTime})</span>`
         : '';
       const lab = teamLabelForViewer(this._viewerTeam(), active.team);
       turnEl.innerHTML = `<strong>${escapeHtml(active.name)}</strong> (${lab})<br/>HP ${active.hp}/${active.maxHp} · MP ${active.mp}/${active.maxMp} · CT ${active.ct}${ch}`;
-      // Active unit + tile highlight always during their turn
-      this.arena.setActiveHighlight(active.id, this.match.map, { x: active.x, y: active.y });
+      // Highlight inspect (cyan) or active (gold)
+      const hlId = panel.highlightUnitId || active.id;
+      const hlUnit = getUnit(this.match, hlId) || active;
+      const mode = useInspectHighlightStyle(this.inspectId, this.match.activeUnitId) ? 'inspect' : 'active';
+      this.arena.setActiveHighlight(hlId, this.match.map, { x: hlUnit.x, y: hlUnit.y }, { mode });
       // Autopan onto whoever is acting (ally or foe); free camera still works after
       if (this._lastFocusedTurnId !== active.id && !this.pres?.busy) {
         this._lastFocusedTurnId = active.id;
@@ -637,8 +660,8 @@ export class GameApp {
       .map((l) => `<div>${escapeHtml(l)}</div>`)
       .join('');
 
-    // Bottom panel: selected unit, else active turn unit
-    this._renderBottomUnitPanel(this.inspectId || this.match.activeUnitId);
+    // Bottom panel: active turn by default; inspect override
+    this._renderBottomUnitPanel(panel.panelUnitId);
 
     // Command bar when player input needed; hide during presentation
     this._renderCommandBar();
@@ -752,6 +775,12 @@ export class GameApp {
   openInspect(unitId) {
     this.inspectId = unitId;
     this._renderBottomUnitPanel(unitId);
+    // Highlight inspected unit on arena (cyan if not active)
+    const u = getUnit(this.match, unitId);
+    if (u && this.arena) {
+      const mode = useInspectHighlightStyle(unitId, this.match.activeUnitId) ? 'inspect' : 'active';
+      this.arena.setActiveHighlight(unitId, this.match.map, { x: u.x, y: u.y }, { mode });
+    }
   }
 
   /**
@@ -862,8 +891,25 @@ export class GameApp {
     });
   }
 
-  /** Confirm control on action chrome after tile preview */
+  /** Confirm control: lower-left FAB (always visible) + optional chrome row */
   _renderConfirmActButton() {
+    const fab = this.screens.querySelector('#confirm-fab');
+    const fabBtn = this.screens.querySelector('#btn-confirm-fab');
+    const pending = this._pendingActTarget;
+    const abName = this.selectedAbility ? getAbility(this.selectedAbility).name : 'Act';
+
+    if (fab && fabBtn) {
+      if (pending && this.selectedAbility) {
+        fab.classList.remove('hidden');
+        fabBtn.textContent = `Confirm ${abName}`;
+        fabBtn.onclick = () => this._confirmPendingAct();
+      } else {
+        fab.classList.add('hidden');
+        fabBtn.onclick = null;
+      }
+    }
+
+    // Compact cancel in ability list (optional)
     const list = this.screens.querySelector('#ability-list');
     if (!list) return;
     let row = list.querySelector('#act-confirm-row');
@@ -873,18 +919,16 @@ export class GameApp {
       row.className = 'act-confirm-row';
       list.appendChild(row);
     }
-    const pending = this._pendingActTarget;
-    const abName = this.selectedAbility ? getAbility(this.selectedAbility).name : 'Act';
     row.innerHTML = pending
-      ? `<button type="button" id="btn-confirm-act" class="btn primary tiny">Confirm ${escapeHtml(abName)} @ (${pending.x},${pending.y})</button>
-         <button type="button" id="btn-cancel-act" class="btn tiny">Cancel</button>`
-      : `<em class="hint">Click a cell to preview, then Confirm</em>`;
-    row.querySelector('#btn-confirm-act')?.addEventListener('click', () => this._confirmPendingAct());
+      ? `<button type="button" id="btn-cancel-act" class="btn tiny">Cancel target</button>
+         <em class="hint">Use lower-left Confirm</em>`
+      : `<em class="hint">Click a cell to preview, then Confirm (bottom-left)</em>`;
     row.querySelector('#btn-cancel-act')?.addEventListener('click', () => {
       this._pendingActTarget = null;
       this.selectedAbility = null;
       this.uiMode = 'idle';
       this.arena.clearRanges();
+      this._renderConfirmActButton();
       this._renderCommandBar();
     });
   }
@@ -1133,7 +1177,7 @@ export class GameApp {
     this.refreshBattle();
   }
 
-  /* Online — WebSocket (npm start) or P2P (GitHub Pages) */
+  /* Online — WebSocket (npm start) or P2P (GitHub Pages / static) */
   showOnline() {
     this.mode = 'online';
     const ep = resolveMultiplayerEndpoint();
@@ -1141,8 +1185,8 @@ export class GameApp {
       ep.mode === 'pages'
         ? 'Browser P2P mode (works on GitHub Pages). Share the room code with a friend on another device.'
         : ep.mode === 'custom'
-          ? `Custom server: ${escapeHtml(ep.url || '')}`
-          : 'Connecting to game server on this host (npm start).';
+          ? `Custom server: ${escapeHtml(ep.url || '')} — falls back to browser P2P if unreachable.`
+          : 'Prefers game server on this host (npm start). If no server is running, Create Room uses browser P2P automatically.';
     this.screens.innerHTML = `
       <section class="panel fft-panel">
         <h2>Online Multiplayer</h2>
@@ -1162,6 +1206,17 @@ export class GameApp {
       this.mp = null;
       this.showMenu();
     };
+    // Refine hint when same-origin WS server is actually missing (static file host)
+    if (ep.mode === 'ws') {
+      void hasMultiplayerHttpServer().then((ok) => {
+        const el = this.screens.querySelector('#on-mode-hint');
+        if (!el || this.mode !== 'online') return;
+        if (!ok) {
+          el.textContent =
+            'No game server detected on this host — Create Room uses browser P2P. Share the room code with a friend.';
+        }
+      });
+    }
   }
 
   _setOnlineStatus(text) {
@@ -1183,6 +1238,7 @@ export class GameApp {
           'p2p-connected': 'Connected to host',
           'ws-open': 'Connected to server',
           'ws-close': 'Disconnected',
+          'ws-fallback-p2p': 'Server unavailable — switching to browser P2P…',
         };
         this._setOnlineStatus(map[s] || s);
       },
@@ -1239,6 +1295,7 @@ export class GameApp {
     this._setOnlineStatus('Creating room…');
     try {
       this.mp?.close();
+      this.mp = null;
       const mp = this._ensureMpClient();
       const info = await mp.createRoom(name);
       this._mpTransport = info.transport;
@@ -1249,8 +1306,9 @@ export class GameApp {
       }
     } catch (e) {
       console.error(e);
-      this.toast(String(e?.message || e) || 'Multiplayer failed');
-      this._setOnlineStatus(String(e?.message || e));
+      const msg = formatMpError(e);
+      this.toast(msg);
+      this._setOnlineStatus(msg);
       this.mp?.close();
       this.mp = null;
     } finally {
@@ -1270,13 +1328,15 @@ export class GameApp {
     this._setOnlineStatus(`Joining ${code}…`);
     try {
       this.mp?.close();
+      this.mp = null;
       const mp = this._ensureMpClient();
       await mp.joinRoom(code, name);
       this._setOnlineStatus(`Joined ${code}`);
     } catch (e) {
       console.error(e);
-      this.toast(String(e?.message || e) || 'Join failed');
-      this._setOnlineStatus(String(e?.message || e));
+      const msg = formatMpError(e);
+      this.toast(msg);
+      this._setOnlineStatus(msg);
       this.mp?.close();
       this.mp = null;
     } finally {

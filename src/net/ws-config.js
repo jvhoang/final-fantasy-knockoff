@@ -54,6 +54,35 @@ export function resolveMultiplayerEndpoint(loc = null, opts = {}) {
 }
 
 /**
+ * Probe whether the Node multiplayer server is available (`GET /api/health`).
+ * Used to skip a doomed WebSocket attempt on pure static hosts (e.g. `npx serve`).
+ * @param {{ fetchImpl?: typeof fetch, url?: string, timeoutMs?: number }} [opts]
+ * @returns {Promise<boolean>}
+ */
+export async function hasMultiplayerHttpServer(opts = {}) {
+  const fetchImpl = opts.fetchImpl || (typeof fetch !== 'undefined' ? fetch : null);
+  if (!fetchImpl) return false;
+  const url = opts.url || '/api/health';
+  const timeoutMs = opts.timeoutMs ?? 1500;
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  try {
+    const res = await fetchImpl(url, {
+      method: 'GET',
+      signal: ctrl?.signal,
+      cache: 'no-store',
+    });
+    if (!res.ok) return false;
+    const data = await res.json().catch(() => null);
+    return !!(data && data.ok);
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
  * @param {string} host
  * @param {string} [href]
  */
@@ -63,6 +92,7 @@ export function isStaticPagesHost(host, href = '') {
   if (h.endsWith('gitlab.io')) return true;
   if (h.endsWith('netlify.app')) return true;
   if (h.endsWith('pages.dev')) return true;
+  if (h.endsWith('vercel.app')) return true;
   if (typeof window !== 'undefined' && window.FFK?.pages) return true;
   if (/github\.io/i.test(href)) return true;
   return false;
@@ -88,4 +118,22 @@ export function peerIdForRoom(code) {
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
   return ('ffk' + c).toLowerCase();
+}
+
+/**
+ * Human-readable error for multiplayer failures (PeerJS errors are objects).
+ * @param {unknown} err
+ */
+export function formatMpError(err) {
+  if (err == null) return 'Multiplayer failed';
+  if (typeof err === 'string') return err;
+  if (err instanceof Error && err.message) return err.message;
+  const e = /** @type {{ message?: string, type?: string, toString?: () => string }} */ (err);
+  if (e.message) return e.message;
+  if (e.type) return `P2P error: ${e.type}`;
+  try {
+    return String(err);
+  } catch {
+    return 'Multiplayer failed';
+  }
 }

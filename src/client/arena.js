@@ -27,11 +27,15 @@ export function markClickSuppressed(state) {
   state._clickSuppressed = true;
 }
 
-/** Prior zoom min was 5; closer zoom allowed for turn focus */
-export const ZOOM_MIN = 2.5;
+/** Face-close zoom (orthographic half-height); low enough to fill frame with head */
+export const ZOOM_MIN = 0.65;
+/** Prior floor before face-zoom polish */
+export const ZOOM_MIN_PRIOR = 2.5;
 export const ZOOM_MAX = 36;
 export const ZOOM_DEFAULT = 14;
 export const ZOOM_INTRO_WIDE = 26;
+/** Face-close framing target (for tests / camera helpers) */
+export const ZOOM_FACE = 0.85;
 
 const TERRAIN = {
   floor: { color: 0x5a7a4a, roughness: 0.92, metal: 0.05 },
@@ -371,15 +375,30 @@ export class ArenaRenderer {
     const rotY = unitYaw + Math.PI; // look from in front
     // Closer than prior 6.5 default, still above ZOOM_MIN
     const zoom = opts.zoom ?? 4.2;
+    const lookY = opts.lookY ?? (mesh.userData.baseY || mesh.position.y) + 0.4;
     return this.animateCameraTo(
       {
-        lookAt: { x: mesh.position.x, y: (mesh.userData.baseY || mesh.position.y) + 0.4, z: mesh.position.z },
+        lookAt: { x: mesh.position.x, y: lookY, z: mesh.position.z },
         rotY,
-        rotX: Math.PI / 5.5,
+        rotX: opts.rotX ?? Math.PI / 5.5,
         zoom,
       },
       opts.ms ?? 850
     );
+  }
+
+  /** Extreme close-up framing on unit head/face (gear detail). */
+  focusOnUnitFace(unitId, opts = {}) {
+    const mesh = this.unitMeshes.get(unitId);
+    if (!mesh) return Promise.resolve();
+    const baseY = mesh.userData.baseY || mesh.position.y || 0;
+    return this.focusOnUnit(unitId, {
+      ...opts,
+      zoom: opts.zoom ?? ZOOM_FACE,
+      lookY: baseY + 0.78,
+      rotX: 0.35,
+      ms: opts.ms ?? 600,
+    });
   }
 
   /**
@@ -476,7 +495,13 @@ export class ArenaRenderer {
    * @param {import('../core/grid.js').GridMap} [map]
    * @param {{x:number,y:number}|null} [tile]
    */
-  setActiveHighlight(unitId, map = null, tile = null) {
+  /**
+   * @param {string|null} unitId
+   * @param {import('../core/grid.js').GridMap} [map]
+   * @param {{x:number,y:number}|null} [tile]
+   * @param {{ mode?: 'active'|'inspect' }} [opts]
+   */
+  setActiveHighlight(unitId, map = null, tile = null, opts = {}) {
     // Clear previous
     if (this._activeHighlight) {
       this.scene.remove(this._activeHighlight);
@@ -485,6 +510,10 @@ export class ArenaRenderer {
     if (this._activeTileMesh) {
       this.scene.remove(this._activeTileMesh);
       this._activeTileMesh = null;
+    }
+    if (this._inspectHighlight) {
+      this.scene.remove(this._inspectHighlight);
+      this._inspectHighlight = null;
     }
     // Restore ring opacity on units
     for (const [, mesh] of this.unitMeshes) {
@@ -497,10 +526,12 @@ export class ArenaRenderer {
     const mesh = this.unitMeshes.get(unitId);
     if (!mesh) return;
 
-    // Pulsing gold ring around unit
+    const mode = opts.mode || 'active';
+    const color = mode === 'inspect' ? 0x66ccff : 0xffe066;
+    // Pulsing ring around unit
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(0.38, 0.045, 8, 28),
-      new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.95 })
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95 })
     );
     ring.rotation.x = Math.PI / 2;
     ring.position.copy(mesh.position);
@@ -508,6 +539,7 @@ export class ArenaRenderer {
     this.scene.add(ring);
     this._activeHighlight = ring;
     mesh.userData._activeRing = ring;
+    if (mode === 'inspect') this._inspectHighlight = ring;
 
     // Bright tile under unit
     const tx = tile?.x ?? Math.round(mesh.position.x);
