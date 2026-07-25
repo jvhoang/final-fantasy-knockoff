@@ -37,21 +37,34 @@ export const ZOOM_INTRO_WIDE = 26;
 /** Face-close framing target (for tests / camera helpers) */
 export const ZOOM_FACE = 0.85;
 
+/**
+ * Arena atmosphere — prior fog felt hazy/washed; density is much lower now
+ * so terrain hues dominate. Exported for unit tests.
+ */
+export const FOG_DENSITY_PRIOR = 0.018;
+export const FOG_DENSITY = 0.0035;
+export const FOG_COLOR = 0xb8d4f0;
+export const SKY_COLOR = 0x7eb6e8;
+export const TONE_EXPOSURE_PRIOR = 1.05;
+export const TONE_EXPOSURE = 1.38;
+export const AMBIENT_INTENSITY = 0.72;
+export const SUN_INTENSITY = 1.45;
+
 const TERRAIN = {
-  floor: { color: 0x5a7a4a, roughness: 0.92, metal: 0.05 },
-  elevated: { color: 0x6d8f62, roughness: 0.88, metal: 0.08 },
-  ramp: { color: 0x8b7355, roughness: 0.85, metal: 0.05 },
-  bridge: { color: 0xa67c3d, roughness: 0.75, metal: 0.15 },
-  water: { color: 0x1e5a8a, roughness: 0.2, metal: 0.3 },
-  wall: { color: 0x6b6560, roughness: 0.85, metal: 0.1 },
-  tower: { color: 0x7a6a5a, roughness: 0.8, metal: 0.12 },
+  floor: { color: 0x6fbf4e, roughness: 0.88, metal: 0.04 },
+  elevated: { color: 0x7fd45a, roughness: 0.84, metal: 0.06 },
+  ramp: { color: 0xc4a06a, roughness: 0.82, metal: 0.05 },
+  bridge: { color: 0xd4a04a, roughness: 0.72, metal: 0.12 },
+  water: { color: 0x2a9fd8, roughness: 0.18, metal: 0.25 },
+  wall: { color: 0x9a9088, roughness: 0.82, metal: 0.08 },
+  tower: { color: 0xb09a7a, roughness: 0.78, metal: 0.1 },
   void: { color: 0x111111, roughness: 1, metal: 0 },
 };
 
-/** Grass shade variants */
-const GRASS_SHADES = [0x4a6b3a, 0x5a7a4a, 0x6a8b55, 0x3d5c32, 0x708f5e, 0x556b42];
-const WATER_SHADES = [0x1a4a7a, 0x1e5a8a, 0x2468a0, 0x163d66, 0x2a7ab0];
-const STONE_SHADES = [0x6b6560, 0x7a756c, 0x5c5850, 0x8a847a, 0x4a4640];
+/** Grass shade variants — saturated greens */
+const GRASS_SHADES = [0x5cb83a, 0x6fbf4e, 0x85d45a, 0x4aa832, 0x90e068, 0x62c448];
+const WATER_SHADES = [0x1e8fd0, 0x2a9fd8, 0x38b0ea, 0x1890c8, 0x45c0f5];
+const STONE_SHADES = [0x9a9088, 0xaea498, 0x8a8278, 0xc0b8a8, 0x7a746c];
 
 export class ArenaRenderer {
   /**
@@ -63,8 +76,9 @@ export class ArenaRenderer {
     this.height = container.clientHeight || 600;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x6a8aaa);
-    this.scene.fog = new THREE.FogExp2(0x8aa8c0, 0.018);
+    this.scene.background = new THREE.Color(SKY_COLOR);
+    // Low density fog — keeps depth cue without washing terrain color
+    this.scene.fog = new THREE.FogExp2(FOG_COLOR, FOG_DENSITY);
 
     this.zoom = ZOOM_DEFAULT;
     this.rotY = Math.PI / 4;
@@ -94,14 +108,14 @@ export class ArenaRenderer {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = TONE_EXPOSURE;
     container.appendChild(this.renderer.domElement);
 
-    // Lighting rig
-    this.scene.add(new THREE.AmbientLight(0xb0c4de, 0.45));
-    const hemi = new THREE.HemisphereLight(0xc9e0ff, 0x3d4a32, 0.55);
+    // Lighting rig — brighter ambient/sun so tiles read vivid
+    this.scene.add(new THREE.AmbientLight(0xd8e8ff, AMBIENT_INTENSITY));
+    const hemi = new THREE.HemisphereLight(0xe8f4ff, 0x5a7a42, 0.7);
     this.scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xfff1d6, 1.15);
+    const sun = new THREE.DirectionalLight(0xfff5e0, SUN_INTENSITY);
     sun.position.set(25, 40, 15);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -112,7 +126,7 @@ export class ArenaRenderer {
     sun.shadow.camera.top = 30;
     sun.shadow.camera.bottom = -30;
     this.scene.add(sun);
-    const fill = new THREE.DirectionalLight(0x88aaff, 0.25);
+    const fill = new THREE.DirectionalLight(0xa8c8ff, 0.4);
     fill.position.set(-15, 10, -10);
     this.scene.add(fill);
 
@@ -591,10 +605,10 @@ export class ArenaRenderer {
     this.tileMeshes.clear();
     const cell = 1;
 
-    // Ground plane under map
+    // Ground plane under map — richer green base
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(map.width + 8, map.height + 8),
-      new THREE.MeshStandardMaterial({ color: 0x3a4a32, roughness: 1 })
+      new THREE.MeshStandardMaterial({ color: 0x4a8a38, roughness: 0.95 })
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.set((map.width - 1) / 2, -0.05, (map.height - 1) / 2);
@@ -618,12 +632,13 @@ export class ArenaRenderer {
             new THREE.BoxGeometry(cell * 0.98, h, cell * 0.98),
             new THREE.MeshPhysicalMaterial({
               color: wc,
-              roughness: 0.12 + seedUnit(decor.seed, 7) * 0.15,
-              metalness: 0.15 + seedUnit(decor.seed, 8) * 0.15,
-              transmission: 0.3 + seedUnit(decor.seed, 9) * 0.15,
-              thickness: 0.5,
+              roughness: 0.18 + seedUnit(decor.seed, 7) * 0.12,
+              metalness: 0.12 + seedUnit(decor.seed, 8) * 0.1,
+              // Lower transmission = less milky haze on water
+              transmission: 0.08 + seedUnit(decor.seed, 9) * 0.08,
+              thickness: 0.35,
               transparent: true,
-              opacity: 0.75 + seedUnit(decor.seed, 10) * 0.15,
+              opacity: 0.92 + seedUnit(decor.seed, 10) * 0.06,
             })
           );
           // Ripple discs
@@ -701,10 +716,10 @@ export class ArenaRenderer {
               metalness: conf.metal,
             })
           );
-          // Shadow patch
+          // Soft shadow patch (lighter so greens stay vivid)
           const shadow = new THREE.Mesh(
             new THREE.CircleGeometry(0.15 + seedUnit(decor.seed, 11) * 0.2, 8),
-            new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.12 + seedUnit(decor.seed, 12) * 0.1 })
+            new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.06 + seedUnit(decor.seed, 12) * 0.05 })
           );
           shadow.rotation.x = -Math.PI / 2;
           shadow.position.set(

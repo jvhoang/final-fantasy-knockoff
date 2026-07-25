@@ -23,13 +23,24 @@ import { previewRangeAndAoe } from '../core/range-preview.js';
 import { computeStatDeltas, formatStatDelta } from '../core/stat-delta.js';
 import { TEAMS } from '../core/constants.js';
 import { WATER_RULES } from '../content/map-castle.js';
-import { resolveIcon, portraitIcon } from '../content/icons.js';
+import { resolveIcon } from '../content/icons.js';
 import { itemIconUrl } from '../content/items.js';
 import {
   CALCULATOR_CT_NUMBERS,
   isMathAbility,
   listCalculatorCtNumbers,
 } from '../content/calculator.js';
+import {
+  ghibliPortraitUrl,
+  resolvePortraitIdentity,
+  buildFunStats,
+} from '../content/ghibli-portrait.js';
+import {
+  recentActionStatus,
+  recentLogEntries,
+  buildActionTimeline,
+  timelineHint,
+} from '../core/action-timeline.js';
 import { ArenaRenderer } from './arena.js';
 import { BattlePresentation } from './battle-presentation.js';
 import { WALK_MS_PER_STEP, BATTLE_INTRO_MS } from './presentation-timing.js';
@@ -80,6 +91,10 @@ export class GameApp {
     /** Pending act target awaiting confirm button */
     this._pendingActTarget = null;
     this._prevActiveForPanel = null;
+    /** Action status panel open (log + CT timeline) */
+    this._statusPanelOpen = false;
+    /** Character detail overlay unit id */
+    this._charOverlayId = null;
     this._buildShell();
   }
 
@@ -491,14 +506,23 @@ export class GameApp {
               <div id="hud-actions" class="hud-block actions chrome-actions"></div>
               <div id="hud-wait-face" class="hud-block chrome-wait-face hidden"></div>
             </div>
-            <!-- Lower-left Confirm FAB — no scroll required -->
-            <div id="confirm-fab" class="confirm-fab hidden" aria-label="Confirm action">
-              <button type="button" id="btn-confirm-fab" class="btn primary confirm-fab-btn">Confirm</button>
+            <!-- Lower-left Confirm FAB + recent-action status bar -->
+            <div id="ll-action-dock" class="ll-action-dock" aria-label="Confirm and action status">
+              <div id="confirm-fab" class="confirm-fab hidden" aria-label="Confirm action">
+                <button type="button" id="btn-confirm-fab" class="btn primary confirm-fab-btn">Confirm</button>
+              </div>
+              <button type="button" id="action-status-bar" class="action-status-bar" aria-label="Recent action — open log and CT timeline">
+                <span class="action-status-label">Recent</span>
+                <span id="action-status-text" class="action-status-text">Battle begins…</span>
+                <span id="action-status-hint" class="action-status-hint"></span>
+              </button>
             </div>
+            <div id="action-status-panel" class="action-status-panel hidden" role="dialog" aria-label="Action log and CT timeline"></div>
           </div>
-          <div id="bottom-unit-panel" class="bottom-unit-panel" aria-label="Unit status">
+          <div id="bottom-unit-panel" class="bottom-unit-panel" aria-label="Unit status" role="button" tabindex="0" title="Tap for full character card">
             <em>Active / selected unit status appears here</em>
           </div>
+          <div id="char-detail-overlay" class="char-detail-overlay hidden" role="dialog" aria-modal="true" aria-label="Character detail"></div>
         </div>
         <aside class="hud action-rail">
           <div id="hud-turn" class="hud-block"></div>
@@ -547,9 +571,14 @@ export class GameApp {
     this.arena.renderer.domElement.addEventListener('click', (e) => this.onArenaClick(e));
     this.arena.renderer.domElement.addEventListener('pointermove', (e) => this.onArenaHover(e));
     window.addEventListener('keydown', this._onBattleKey);
+    this.screens.querySelector('#action-status-bar')?.addEventListener('click', () => {
+      this._statusPanelOpen = !this._statusPanelOpen;
+      this._renderActionStatus();
+    });
     // Immediate bottom panel for active unit (before slow AI playback finishes)
     this._renderBottomUnitPanel(this.match.activeUnitId);
     this._renderCommandBar();
+    this._renderActionStatus();
   }
 
   _onBattleKey = (e) => {
@@ -669,6 +698,86 @@ export class GameApp {
     // After Act only Wait remains → auto-open Wait/Face (visible in fixed chrome)
     this._maybeAutoWaitFace();
     this._syncActionChromeVisibility();
+    this._renderActionStatus();
+    if (this._charOverlayId) this._renderCharOverlay(this._charOverlayId);
+  }
+
+  /**
+   * Lower-left status bar (recent action) + expandable log / CT / cast timeline.
+   */
+  _renderActionStatus() {
+    if (!this.match) return;
+    const textEl = this.screens.querySelector('#action-status-text');
+    const hintEl = this.screens.querySelector('#action-status-hint');
+    const panel = this.screens.querySelector('#action-status-panel');
+    const status = recentActionStatus(this.match);
+    const timeline = buildActionTimeline(this.match);
+    const hint = timelineHint(timeline);
+    if (textEl) textEl.textContent = status.text;
+    if (hintEl) hintEl.textContent = hint || '';
+
+    if (!panel) return;
+    if (!this._statusPanelOpen) {
+      panel.classList.add('hidden');
+      panel.innerHTML = '';
+      return;
+    }
+    panel.classList.remove('hidden');
+    const logs = recentLogEntries(this.match, 20);
+    const logHtml = logs.length
+      ? logs
+          .slice()
+          .reverse()
+          .map((l) => `<li class="status-log-line">${escapeHtml(l)}</li>`)
+          .join('')
+      : `<li class="status-log-line muted">No actions yet</li>`;
+    const upHtml = (timeline.upcoming || [])
+      .map((u) => {
+        const when = u.isActive ? 'NOW' : `~${u.ticksUntil} CT`;
+        return `<li class="status-ct-line ${u.isActive ? 'is-active' : ''} ${u.team}">
+          <span class="ct-who">${escapeHtml(u.name)}</span>
+          <span class="ct-when">${when}</span>
+          <span class="ct-meta">CT ${u.ct} · Spd ${u.speed}</span>
+        </li>`;
+      })
+      .join('');
+    const castHtml = (timeline.charges || []).length
+      ? timeline.charges
+          .map((c) => {
+            const ab = getAbility(c.abilityId);
+            return `<li class="status-cast-line ${c.team}">
+              <span class="cast-who">${escapeHtml(c.name)}</span>
+              <span class="cast-ab">${escapeHtml(ab?.name || c.abilityId)}</span>
+              <span class="cast-eta">hits in <b>${c.chargeLeft}</b> / ${c.castTime} CT</span>
+            </li>`;
+          })
+          .join('')
+      : `<li class="status-cast-line muted">No charged casts</li>`;
+
+    panel.innerHTML = `
+      <div class="status-panel-head">
+        <strong>Action Log &amp; Timeline</strong>
+        <button type="button" id="status-panel-close" class="btn tiny">Close</button>
+      </div>
+      <div class="status-panel-grid">
+        <section class="status-panel-sec">
+          <h4>Recent plays</h4>
+          <ul class="status-log-list">${logHtml}</ul>
+        </section>
+        <section class="status-panel-sec">
+          <h4>Upcoming turns (CT)</h4>
+          <ul class="status-ct-list">${upHtml || '<li class="muted">—</li>'}</ul>
+        </section>
+        <section class="status-panel-sec">
+          <h4>Charged casts</h4>
+          <ul class="status-cast-list">${castHtml}</ul>
+        </section>
+      </div>
+    `;
+    panel.querySelector('#status-panel-close')?.addEventListener('click', () => {
+      this._statusPanelOpen = false;
+      this._renderActionStatus();
+    });
   }
 
   /**
@@ -792,6 +901,7 @@ export class GameApp {
 
   /**
    * Bottom panel under arena — active turn unit or selected unit.
+   * Ghibli face-close portrait; click opens full character overlay.
    * @param {string} [unitId]
    */
   _renderBottomUnitPanel(unitId) {
@@ -800,27 +910,30 @@ export class GameApp {
     const id = unitId || this.inspectId || this.match.activeUnitId;
     if (!id) {
       el.innerHTML = `<em>Waiting for turn…</em>`;
+      el.onclick = null;
       return;
     }
     const data = getUnitInspect(this.match, id, this._viewerTeam());
     if (!data) return;
     const unit = getUnit(this.match, id);
-    const portrait = portraitIcon(data.jobId, unit?.gender || 'm', data.team);
+    const gender = unit?.gender || 'm';
+    const portrait = ghibliPortraitUrl(data.jobId, gender, data.team, { mode: 'face', size: 128 });
     const isActive = id === this.match.activeUnitId;
     const allyFoe = teamLabelForViewer(this._viewerTeam(), data.team);
     const statusBits = (data.statuses || [])
       .map((s) => `<span class="status-pill">${escapeHtml(s.id)}</span>`)
       .join(' ');
     el.innerHTML = `
-      <div class="bottom-unit-inner">
-        <img class="unit-portrait" src="${portrait}" width="72" height="72" alt="portrait"/>
+      <div class="bottom-unit-inner" data-unit-id="${escapeHtml(id)}">
+        <img class="unit-portrait ghibli-portrait" src="${portrait}" width="72" height="72" alt="${escapeHtml(data.jobName)} portrait"/>
         <div class="bottom-unit-main">
           <div class="inspect-head">
             <strong>${escapeHtml(data.name)}</strong>
             <span class="badge ${allyFoe === 'Ally' ? 'player' : 'enemy'}">${escapeHtml(allyFoe)}</span>
             ${isActive ? '<span class="badge active-turn">ACTIVE</span>' : ''}
+            <span class="hint-tap">Tap for full card</span>
           </div>
-          <div class="inspect-job">${escapeHtml(data.jobName)} · Face ${escapeHtml(data.facing)} ${data.alive ? '' : '· KO'}</div>
+          <div class="inspect-job">${escapeHtml(data.jobName)} · ${gender === 'f' ? 'Female' : 'Male'} · Face ${escapeHtml(data.facing)} ${data.alive ? '' : '· KO'}</div>
           <div class="inspect-bars">
             <div>HP <b>${data.hp}</b>/${data.maxHp}</div>
             <div>MP <b>${data.mp}</b>/${data.maxMp}</div>
@@ -839,6 +952,123 @@ export class GameApp {
         </div>
       </div>
     `;
+    el.onclick = () => this.openCharOverlay(id);
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        this.openCharOverlay(id);
+      }
+    };
+  }
+
+  /**
+   * Full-screen Ghibli character card overlay.
+   * @param {string} unitId
+   */
+  openCharOverlay(unitId) {
+    if (!unitId || !this.match) return;
+    this._charOverlayId = unitId;
+    this.openInspect(unitId);
+    this._renderCharOverlay(unitId);
+    audio.sfx('ui');
+  }
+
+  closeCharOverlay() {
+    this._charOverlayId = null;
+    const el = this.screens.querySelector('#char-detail-overlay');
+    if (el) {
+      el.classList.add('hidden');
+      el.innerHTML = '';
+    }
+  }
+
+  /**
+   * @param {string} unitId
+   */
+  _renderCharOverlay(unitId) {
+    const el = this.screens.querySelector('#char-detail-overlay');
+    if (!el || !this.match) return;
+    const data = getUnitInspect(this.match, unitId, this._viewerTeam());
+    const unit = getUnit(this.match, unitId);
+    if (!data || !unit) {
+      this.closeCharOverlay();
+      return;
+    }
+    const gender = unit.gender || 'm';
+    const identity = resolvePortraitIdentity({
+      jobId: data.jobId,
+      gender,
+      team: data.team,
+      name: data.name,
+    });
+    const hero = ghibliPortraitUrl(data.jobId, gender, data.team, { mode: 'hero', size: 480 });
+    const fun = buildFunStats(data, unit);
+    const allyFoe = teamLabelForViewer(this._viewerTeam(), data.team);
+    const skills = (data.abilities || [])
+      .map((a) => {
+        const d = formatAbilityDetail(a);
+        return `<li><strong>${escapeHtml(d?.name || a)}</strong> <span class="muted">${escapeHtml(d?.summary || '')}</span></li>`;
+      })
+      .join('');
+    const funBars = fun.lines
+      .map(
+        (l) => `
+      <div class="fun-stat-row">
+        <span class="fun-label">${escapeHtml(l.label)}</span>
+        <div class="fun-bar-track"><div class="fun-bar-fill" style="width:${Math.min(100, l.value)}%"></div></div>
+        <span class="fun-val">${l.value}</span>
+        <span class="fun-hint">${escapeHtml(l.hint)}</span>
+      </div>`
+      )
+      .join('');
+
+    el.classList.remove('hidden');
+    el.innerHTML = `
+      <div class="char-overlay-backdrop" data-close="1"></div>
+      <div class="char-overlay-card" role="document">
+        <button type="button" class="char-overlay-close btn" id="char-overlay-close" aria-label="Close">✕</button>
+        <div class="char-overlay-hero">
+          <img class="char-hero-portrait ghibli-portrait" src="${hero}" alt="${escapeHtml(identity.jobName)} hero portrait"/>
+          <div class="char-hero-meta">
+            <p class="char-hero-kicker">${escapeHtml(allyFoe)} · ${escapeHtml(identity.genderLabel)}</p>
+            <h2 class="char-hero-name">${escapeHtml(data.name)}</h2>
+            <p class="char-hero-job">${escapeHtml(identity.jobName)}</p>
+            <p class="char-hero-desc">${escapeHtml(JOBS[data.jobId]?.description || '')}</p>
+          </div>
+        </div>
+        <div class="char-overlay-body">
+          <section>
+            <h3>Combat attributes</h3>
+            <div class="char-attr-grid">
+              <div>HP <b>${data.hp}</b> / ${data.maxHp}</div>
+              <div>MP <b>${data.mp}</b> / ${data.maxMp}</div>
+              <div>CT <b>${data.ct}</b></div>
+              <div>Speed <b>${data.speed}</b></div>
+              <div>Move <b>${data.move}</b></div>
+              <div>Jump <b>${data.jump}</b></div>
+              <div>PA <b>${data.pa}</b></div>
+              <div>MA <b>${data.ma}</b></div>
+              <div>Def <b>${data.def}</b></div>
+              <div>Facing <b>${escapeHtml(data.facing)}</b></div>
+              <div>Weapon <b>${escapeHtml(data.weaponId)}</b></div>
+              <div>Armor <b>${escapeHtml(data.armorId)}</b></div>
+              <div>Acc <b>${escapeHtml(data.accessoryId)}</b></div>
+              <div>Status <b>${(data.statuses || []).map((s) => s.id).join(', ') || 'None'}</b></div>
+            </div>
+          </section>
+          <section>
+            <h3>Spirit stats</h3>
+            <div class="fun-stats">${funBars}</div>
+          </section>
+          <section>
+            <h3>Skills</h3>
+            <ul class="char-skill-list">${skills}</ul>
+          </section>
+        </div>
+      </div>
+    `;
+    el.querySelector('#char-overlay-close')?.addEventListener('click', () => this.closeCharOverlay());
+    el.querySelector('.char-overlay-backdrop')?.addEventListener('click', () => this.closeCharOverlay());
   }
 
   _canControl(unit) {

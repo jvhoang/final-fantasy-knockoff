@@ -135,12 +135,24 @@ body {
   box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.35);
 }
 
-/* Lower-left Confirm FAB — always reachable on phone */
-.confirm-fab {
+/* Lower-left dock: Confirm FAB + recent-action status bar */
+.ll-action-dock {
   position: absolute;
-  left: 0.5rem;
-  bottom: 0.55rem;
+  left: 0.45rem;
+  bottom: 0.5rem;
   z-index: 25;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  max-width: min(92vw, 22rem);
+  pointer-events: none;
+}
+
+.confirm-fab {
+  position: relative;
+  left: 0;
+  bottom: 0;
   pointer-events: none;
 }
 
@@ -163,6 +175,312 @@ body {
 
 .confirm-fab-btn:active {
   transform: scale(0.97);
+}
+
+.action-status-bar {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  width: min(92vw, 16.5rem);
+  padding: 0.45rem 0.65rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(12, 22, 34, 0.72);
+  color: #e8f4ff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+}
+
+.action-status-bar:active {
+  transform: scale(0.98);
+}
+
+.action-status-label {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+  font-weight: 700;
+}
+
+.action-status-text {
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.25;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-status-hint {
+  font-size: 0.68rem;
+  opacity: 0.85;
+  color: #9fd8ff;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-status-panel {
+  position: absolute;
+  left: 0.45rem;
+  bottom: 5.2rem;
+  z-index: 28;
+  width: min(94vw, 22rem);
+  max-height: min(55vh, 22rem);
+  overflow: auto;
+  padding: 0.65rem 0.75rem;
+  border-radius: 14px;
+  border: 1px solid rgba(120, 200, 255, 0.35);
+  background: rgba(8, 16, 28, 0.94);
+  color: #e8f4ff;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+}
+
+.action-status-panel.hidden {
+  display: none !important;
+}
+
+.status-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.status-panel-sec h4 {
+  margin: 0.45rem 0 0.25rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8ec8f0;
+}
+
+.status-log-list,
+.status-ct-list,
+.status-cast-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 7.5rem;
+  overflow: auto;
+}
+
+.status-log-line,
+.status-ct-line,
+.status-cast-line {
+  font-size: 0.72rem;
+  padding: 0.28rem 0.2rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.status-ct-line.is-active {
+  background: rgba(0, 176, 111, 0.18);
+  border-radius: 6px;
+}
+
+.status-ct-line .ct-when,
+.status-cast-line .cast-eta {
+  float: right;
+  color: #9fd8ff;
+  font-weight: 700;
+}
+
+.status-log-line.muted,
+.status-cast-line.muted {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+/* Full-screen Ghibli character card */
+.char-detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem;
+}
+
+.char-detail-overlay.hidden {
+  display: none !important;
+}
+
+.char-overlay-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 10, 18, 0.78);
+  backdrop-filter: blur(4px);
+}
+
+.char-overlay-card {
+  position: relative;
+  z-index: 1;
+  width: min(96vw, 560px);
+  max-height: min(94vh, 820px);
+  overflow: auto;
+  border-radius: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  background: linear-gradient(165deg, #1a2a3a 0%, #0e1824 55%, #152030 100%);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  color: #f0f6ff;
+}
+
+.char-overlay-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 2;
+  min-width: 2.25rem !important;
+  padding: 0.35rem 0.5rem !important;
+}
+
+.char-overlay-hero {
+  display: grid;
+  grid-template-columns: minmax(140px, 46%) 1fr;
+  gap: 0.75rem;
+  padding: 1rem 1rem 0.5rem;
+  align-items: end;
+}
+
+.char-hero-portrait {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 14px;
+  border: 3px solid rgba(255, 220, 140, 0.55);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  background: #1a3048;
+}
+
+.char-hero-kicker {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9fd8ff;
+}
+
+.char-hero-name {
+  margin: 0.2rem 0;
+  font-size: 1.55rem;
+  line-height: 1.15;
+  font-weight: 800;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+}
+
+.char-hero-job {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #f4d35e;
+}
+
+.char-hero-desc {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  opacity: 0.88;
+  line-height: 1.35;
+}
+
+.char-overlay-body {
+  padding: 0.5rem 1rem 1.1rem;
+}
+
+.char-overlay-body h3 {
+  margin: 0.75rem 0 0.4rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #8ec8f0;
+}
+
+.char-attr-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem 0.75rem;
+  font-size: 0.82rem;
+}
+
+.fun-stat-row {
+  display: grid;
+  grid-template-columns: 4.2rem 1fr 2rem;
+  gap: 0.35rem;
+  align-items: center;
+  margin-bottom: 0.35rem;
+  font-size: 0.75rem;
+}
+
+.fun-bar-track {
+  height: 0.45rem;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.fun-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #3ecfbf, #f4d35e);
+}
+
+.fun-hint {
+  grid-column: 2 / -1;
+  font-size: 0.65rem;
+  opacity: 0.55;
+  margin-top: -0.15rem;
+}
+
+.char-skill-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.8rem;
+}
+
+.char-skill-list .muted {
+  opacity: 0.65;
+  font-weight: 400;
+}
+
+.unit-portrait.ghibli-portrait {
+  object-fit: cover;
+  background: linear-gradient(180deg, #a9cce3, #d6eaf8);
+}
+
+.hint-tap {
+  margin-left: auto;
+  font-size: 0.65rem;
+  opacity: 0.55;
+  font-weight: 500;
+}
+
+.bottom-unit-panel {
+  cursor: pointer;
+}
+
+.bottom-unit-panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 520px) {
+  .char-overlay-hero {
+    grid-template-columns: 1fr;
+  }
+  .char-hero-portrait {
+    max-width: 220px;
+    margin: 0 auto;
+  }
 }
 
 .panel.wide {
