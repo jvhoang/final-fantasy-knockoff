@@ -60,7 +60,7 @@ const index = `<!DOCTYPE html>
     <script type="importmap">
       {
         "imports": {
-          "three": "vendor/three.module.js"
+          "three": "${base}vendor/three.module.js"
         }
       }
     </script>
