@@ -1,21 +1,18 @@
-# STATUS — Battle polish goal (2026-07-25)
+# STATUS — Mobile / FX / BGM goal (2026-07-25)
 
-## Complete
-- Looping melodic BGM via pure `planBgmRearm` (always ≥1 phrase ahead; 2.5s tick) — no pad-only silence; `simulateBgmLoop` asserts maxGap=0 over 60s/180s
-- Distinct SFX: move / melee / bow / magic / summon / hit / ui
-- Active unit + tile highlight; zoom min `2.5` (was 5)
-- ~4.2s “Battle begins” intro (wide → orbit → focus first actor)
-- Per-turn camera focus (center + front-facing)
-- Command bar Move/Ability/Wait always visible; ability submenu + Calculator CT 2–6
-- Range + AoE preview before confirm (hover tiles)
-- MP cost floaters suppressed; cast_resolve shows ability name
-- Longer holds; melee swing + hurt; bow projectile; MP-scaled magic spectacle
-- Formation: equip-colored weapon mesh (Blood Sword); green/red stat deltas
-- Tests: 87 pass; Playwright ×2 “Battle begins” + canvas; `docs/` rebuilt
+## Shipped
+- Fixed right `battle-action-chrome` (Move/Ability/Wait + Wait/Face) always on-screen
+- Auto Wait/Face after Act (`shouldAutoOpenWaitFace`)
+- Turn focus zoom `4.2` (was 6.5; still > ZOOM_MIN 2.5)
+- KO ash path strengthened; presentation queue + busy depth (no late teleport)
+- Target-directed spell/summon creatures + residual/shake when arena-wide
+- Formation sticky chip pickers (job/weapon/armor/acc) without scrolling
+- Long multi-section BGM (~28s) with early/mid/late intensity from battle progress
 
 ## Evidence
-- Scratch: `npm-test.log`, `playwright-battle.log`, `battle-intro.png`
-- Unit: `tests/battle-polish.test.js`
+- 100 tests green → scratch `npm-test.log`
+- Playwright ×2 mobile 390×844 → `mobile-battle-chrome.png`, `playwright-battle.log`, `playwright-mobile.log`
+- `docs/` rebuilt; pushed to GitHub Pages
 
-## Next
-- Optional: push `docs/` to GitHub Pages for live deploy
+## Tests
+- `tests/mobile-polish.test.js`, existing `battle-polish.test.js`

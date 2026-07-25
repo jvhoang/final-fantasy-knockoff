@@ -3,42 +3,128 @@
  * Melodic battle theme re-schedules forever while BGM is on (not a one-shot intro).
  */
 
-/** Seconds of melody scheduled per loop arm */
-export const BGM_PHRASE_SEC = 8.4;
+/** Seconds of melody scheduled per loop arm (longer multi-section epic piece) */
+export const BGM_PHRASE_SEC = 28.0;
 
 /** How often we re-arm the next melodic phrase while playing (≤ half phrase) */
-export const BGM_RESCHEDULE_MS = 2500;
+export const BGM_RESCHEDULE_MS = 4000;
 
-/** Minor-mode battle ostinato (Hz) — heroic 8-bar feel */
-export const BGM_MELODY_HZ = [
-  220.0, 246.94, 261.63, 293.66, 329.63, 293.66, 261.63, 246.94,
-  196.0, 220.0, 246.94, 261.63, 293.66, 261.63, 246.94, 220.0,
-  174.61, 196.0, 220.0, 246.94, 261.63, 246.94, 220.0, 196.0,
-];
+/** Note step within a phrase */
+export const BGM_NOTE_STEP = 0.28;
 
-/** Harmony thirds for a fuller arrangement */
-export const BGM_HARMONY_HZ = [
-  329.63, 369.99, 392.0, 440.0, 493.88, 440.0, 392.0, 369.99,
-  293.66, 329.63, 369.99, 392.0, 440.0, 392.0, 369.99, 329.63,
-  261.63, 293.66, 329.63, 369.99, 392.0, 369.99, 329.63, 293.66,
-];
+/**
+ * Multi-section battle themes (Hz). Longer before loop; phase picks variation.
+ * early = heroic minor, mid = rising tension, late = dramatic intensity
+ */
+export const BGM_THEMES = {
+  early: {
+    melody: [
+      220, 246.94, 261.63, 293.66, 329.63, 293.66, 261.63, 246.94,
+      196, 220, 246.94, 261.63, 293.66, 261.63, 246.94, 220,
+      174.61, 196, 220, 246.94, 261.63, 246.94, 220, 196,
+      246.94, 261.63, 293.66, 329.63, 392, 329.63, 293.66, 261.63,
+      220, 196, 174.61, 196, 220, 246.94, 261.63, 220,
+      293.66, 329.63, 349.23, 392, 440, 392, 349.23, 329.63,
+      261.63, 293.66, 329.63, 261.63, 220, 246.94, 261.63, 220,
+      196, 220, 246.94, 196, 174.61, 196, 220, 196,
+      220, 261.63, 329.63, 392, 440, 392, 329.63, 261.63,
+      293.66, 246.94, 220, 196, 220, 246.94, 261.63, 220,
+      174.61, 196, 220, 261.63, 293.66, 261.63, 220, 196,
+      246.94, 293.66, 349.23, 392, 349.23, 293.66, 246.94, 220,
+      196, 220, 261.63, 329.63, 261.63, 220, 196, 174.61,
+    ],
+    harmony: null, // derived
+  },
+  mid: {
+    melody: [
+      246.94, 277.18, 293.66, 329.63, 369.99, 329.63, 293.66, 277.18,
+      220, 246.94, 277.18, 293.66, 329.63, 293.66, 277.18, 246.94,
+      196, 220, 246.94, 277.18, 293.66, 277.18, 246.94, 220,
+      277.18, 293.66, 329.63, 369.99, 440, 369.99, 329.63, 293.66,
+      246.94, 220, 196, 220, 246.94, 277.18, 293.66, 246.94,
+      329.63, 369.99, 392, 440, 493.88, 440, 392, 369.99,
+      293.66, 329.63, 369.99, 293.66, 246.94, 277.18, 293.66, 246.94,
+      220, 246.94, 277.18, 220, 196, 220, 246.94, 220,
+      277.18, 329.63, 392, 440, 523.25, 440, 392, 329.63,
+      369.99, 293.66, 246.94, 220, 246.94, 277.18, 293.66, 246.94,
+      196, 220, 246.94, 293.66, 329.63, 293.66, 246.94, 220,
+      277.18, 329.63, 392, 440, 392, 329.63, 277.18, 246.94,
+      220, 246.94, 293.66, 369.99, 293.66, 246.94, 220, 196,
+    ],
+  },
+  late: {
+    melody: [
+      293.66, 329.63, 349.23, 392, 466.16, 392, 349.23, 329.63,
+      246.94, 293.66, 329.63, 349.23, 392, 349.23, 329.63, 293.66,
+      220, 246.94, 293.66, 329.63, 349.23, 329.63, 293.66, 246.94,
+      329.63, 349.23, 392, 440, 523.25, 440, 392, 349.23,
+      293.66, 246.94, 220, 246.94, 293.66, 329.63, 349.23, 293.66,
+      392, 440, 466.16, 523.25, 587.33, 523.25, 466.16, 440,
+      349.23, 392, 440, 349.23, 293.66, 329.63, 349.23, 293.66,
+      246.94, 293.66, 329.63, 246.94, 220, 246.94, 293.66, 246.94,
+      329.63, 392, 466.16, 523.25, 622.25, 523.25, 466.16, 392,
+      440, 349.23, 293.66, 246.94, 293.66, 329.63, 349.23, 293.66,
+      220, 246.94, 293.66, 349.23, 392, 349.23, 293.66, 246.94,
+      329.63, 392, 466.16, 523.25, 466.16, 392, 329.63, 293.66,
+      246.94, 293.66, 349.23, 440, 349.23, 293.66, 246.94, 220,
+    ],
+  },
+};
+
+/** Default / early melody alias for tests */
+export const BGM_MELODY_HZ = BGM_THEMES.early.melody;
+
+/** Harmony derived a fifth above when not listed */
+export function harmonyFor(freq) {
+  return freq * 1.5;
+}
+
+export const BGM_HARMONY_HZ = BGM_MELODY_HZ.map(harmonyFor);
+
+/**
+ * Battle progress 0..1 from living units (fewer living → later phase).
+ * @param {{ units?: { alive?: boolean, team?: string }[] }|null} state
+ * @returns {{ progress: number, phase: 'early'|'mid'|'late', intensity: number }}
+ */
+export function bgmPhaseFromBattle(state) {
+  const units = state?.units || [];
+  const living = units.filter((u) => u.alive !== false);
+  const livingEnemies = living.filter((u) => u.team === 'enemy');
+  const totalEnemies = units.filter((u) => u.team === 'enemy').length || 4;
+  // 0 when all foes alive, ~1 when none left (clamp)
+  const foesDown = 1 - livingEnemies.length / Math.max(1, totalEnemies);
+  // Also weight total casualties
+  const total = units.length || 8;
+  const deadRatio = 1 - living.length / total;
+  const progress = Math.min(1, Math.max(0, foesDown * 0.7 + deadRatio * 0.3));
+  let phase = 'early';
+  if (progress >= 0.62) phase = 'late';
+  else if (progress >= 0.32) phase = 'mid';
+  const intensity = phase === 'late' ? 1.55 : phase === 'mid' ? 1.2 : 1.0;
+  return { progress, phase, intensity, livingEnemies: livingEnemies.length, totalEnemies };
+}
 
 /**
  * Pure schedule plan: list of note events for one phrase starting at t0.
- * Used by AudioDirector and unit tests (no AudioContext required).
  * @param {number} t0 start time (seconds)
- * @param {number} [step=0.35]
+ * @param {number} [step=BGM_NOTE_STEP]
+ * @param {'early'|'mid'|'late'} [phase='early']
  * @returns {{ t: number, freq: number, harm: number, dur: number }[]}
  */
-export function buildBgmPhraseSchedule(t0, step = 0.35) {
+export function buildBgmPhraseSchedule(t0, step = BGM_NOTE_STEP, phase = 'early') {
+  const theme = BGM_THEMES[phase] || BGM_THEMES.early;
+  const melody = theme.melody;
   const events = [];
-  const n = BGM_MELODY_HZ.length;
-  for (let i = 0; i < n; i++) {
+  // Cap notes to fit BGM_PHRASE_SEC
+  const maxNotes = Math.min(melody.length, Math.floor(BGM_PHRASE_SEC / step));
+  for (let i = 0; i < maxNotes; i++) {
+    const freq = melody[i % melody.length];
     events.push({
       t: t0 + i * step,
-      freq: BGM_MELODY_HZ[i % n],
-      harm: BGM_HARMONY_HZ[i % BGM_HARMONY_HZ.length],
-      dur: step * 0.85,
+      freq,
+      harm: harmonyFor(freq),
+      dur: step * 0.82,
+      phase,
     });
   }
   return events;
@@ -93,6 +179,11 @@ export function planBgmRearm(now, nextPhraseAt, phraseSec = BGM_PHRASE_SEC) {
   return { starts, nextPhraseAt: next };
 }
 
+/** Phrase duration must stay long enough for multi-section epic feel */
+export function bgmPhraseIsLongForm(phraseSec = BGM_PHRASE_SEC) {
+  return phraseSec >= 20;
+}
+
 /**
  * Simulate shipped tick loop over wall-clock audio time (no AudioContext).
  * Mirrors startBgm initial arm + periodic _onBgmTick using planBgmRearm.
@@ -144,6 +235,11 @@ export class AudioDirector {
     this._bgmTimer = null;
     this._phraseCount = 0;
     this._nextPhraseAt = 0;
+    /** @type {'early'|'mid'|'late'} */
+    this._bgmPhase = 'early';
+    this._bgmIntensity = 1;
+    this._padGain = null;
+    this._bassGain = null;
   }
 
   ensure() {
@@ -183,9 +279,11 @@ export class AudioDirector {
     this.bgmPlaying = true;
     this._bgmNodes = [];
     this._phraseCount = 0;
+    this._bgmPhase = 'early';
+    this._bgmIntensity = 1;
 
     const master = ctx.createGain();
-    master.gain.value = 0.1;
+    master.gain.value = 0.11;
     master.connect(ctx.destination);
     this._bgmMaster = master;
 
@@ -202,6 +300,7 @@ export class AudioDirector {
     padFilter.connect(padGain);
     padGain.connect(master);
     pad.start();
+    this._padGain = padGain;
 
     // Sustained fifth
     const fifth = ctx.createOscillator();
@@ -222,6 +321,7 @@ export class AudioDirector {
     bass.connect(bassGain);
     bassGain.connect(master);
     bass.start();
+    this._bassGain = bassGain;
 
     // Lead melody (re-scheduled forever)
     const melody = ctx.createOscillator();
@@ -282,28 +382,58 @@ export class AudioDirector {
    */
   _scheduleMelodyPhrase(t0) {
     if (!this.ctx || !this._melodyOsc || !this._melodyGain) return;
-    const schedule = buildBgmPhraseSchedule(t0, 0.35);
+    const schedule = buildBgmPhraseSchedule(t0, BGM_NOTE_STEP, this._bgmPhase);
+    const lead = 0.1 * this._bgmIntensity;
+    const harmG = 0.05 * this._bgmIntensity;
     for (const ev of schedule) {
       this._melodyOsc.frequency.setValueAtTime(ev.freq, ev.t);
       this._harmonyOsc.frequency.setValueAtTime(ev.harm, ev.t);
       this._melodyGain.gain.setValueAtTime(0.0001, ev.t);
-      this._melodyGain.gain.linearRampToValueAtTime(0.11, ev.t + 0.02);
+      this._melodyGain.gain.linearRampToValueAtTime(lead, ev.t + 0.02);
       this._melodyGain.gain.exponentialRampToValueAtTime(0.0001, ev.t + ev.dur);
       this._harmonyGain.gain.setValueAtTime(0.0001, ev.t);
-      this._harmonyGain.gain.linearRampToValueAtTime(0.055, ev.t + 0.03);
+      this._harmonyGain.gain.linearRampToValueAtTime(harmG, ev.t + 0.03);
       this._harmonyGain.gain.exponentialRampToValueAtTime(0.0001, ev.t + ev.dur);
     }
     this._phraseCount += 1;
     this._nextPhraseAt = t0 + BGM_PHRASE_SEC;
   }
 
-  /** @returns {{ playing: boolean, phraseCount: number, rescheduleMs: number }} */
+  /**
+   * Shift BGM toward mid/late intensity as the fight progresses.
+   * @param {{ units?: object[] }|null} state
+   */
+  setBattleProgress(state) {
+    const info = bgmPhaseFromBattle(state);
+    const prev = this._bgmPhase;
+    this._bgmPhase = info.phase;
+    this._bgmIntensity = info.intensity;
+    if (this._padGain) {
+      this._padGain.gain.value = info.phase === 'late' ? 0.3 : info.phase === 'mid' ? 0.25 : 0.22;
+    }
+    if (this._bassGain) {
+      this._bassGain.gain.value = info.phase === 'late' ? 0.16 : 0.1;
+    }
+    if (this._bgmMaster) {
+      this._bgmMaster.gain.value = info.phase === 'late' ? 0.14 : 0.11;
+    }
+    // Force re-arm soon when phase changes so new theme starts
+    if (this.bgmPlaying && prev !== info.phase && this.ctx) {
+      this._nextPhraseAt = Math.min(this._nextPhraseAt, this.ctx.currentTime + 0.15);
+      this._onBgmTick();
+    }
+    return info;
+  }
+
+  /** @returns {{ playing: boolean, phraseCount: number, rescheduleMs: number, phase: string, intensity: number }} */
   getBgmStatus() {
     return {
       playing: this.bgmPlaying,
       phraseCount: this._phraseCount,
       rescheduleMs: BGM_RESCHEDULE_MS,
       phraseSec: BGM_PHRASE_SEC,
+      phase: this._bgmPhase,
+      intensity: this._bgmIntensity,
     };
   }
 

@@ -19,6 +19,8 @@ import {
 } from './presentation-timing.js';
 import { getAbility } from '../content/abilities.js';
 import { audio } from './audio.js';
+import { planAbilityFx } from './fx-plan.js';
+import { aoeTiles } from '../core/grid.js';
 
 /**
  * Whether a combat floater should be suppressed (MP cost deductions).
@@ -65,11 +67,24 @@ export class BattlePresentation {
     /** @type {{ el: HTMLElement, unitId: string, until: number }[]} */
     this.floaters = [];
     this.busy = false;
+    this._busyDepth = 0;
     this._eventCursor = 0;
+    /** Serialize concurrent playEventsSinceCursor so late-game anims never skip */
+    this._playTail = Promise.resolve();
   }
 
   resetEvents(state) {
     this._eventCursor = state?.events?.length || 0;
+  }
+
+  _enterBusy() {
+    this._busyDepth = (this._busyDepth || 0) + 1;
+    this.busy = true;
+  }
+
+  _leaveBusy() {
+    this._busyDepth = Math.max(0, (this._busyDepth || 1) - 1);
+    this.busy = this._busyDepth > 0;
   }
 
   /**
@@ -126,19 +141,19 @@ export class BattlePresentation {
       }
 
       this.arena.playAnim(ev.unitId, anim, hold);
-      if (!melee && !bow) {
-        this.arena.spawnCastFx(ev.unitId, summon || spectacle.arenaWide);
-        this.arena.spawnMagicSpectacle(ev.unitId, abId, spectacle, state.map, ev.target);
-      }
       if (bow && ev.target) {
         this.arena.spawnArrowProjectile(ev.unitId, ev.target, state.map, hold * 0.85);
+      } else if (!melee) {
+        this.arena.spawnCastFx(ev.unitId, summon || spectacle.arenaWide);
+        const fxPlan = planAbilityFx(abId, spectacle, ev.target || null);
+        const impacts = this._impactUnitIds(state, ev);
+        // Direct hits + unique summon creature; residual only if arena-wide
+        await this.arena.playAbilityFxPlan(fxPlan, ev.unitId, ev.target, state.map, impacts);
       }
       // Ability name label (not MP)
       if (ev.text) this.spawnFloater(ev.unitId, ev.text, ev.color || '#ffee88');
-      if (ev.target && !melee && !bow) {
-        this.arena.spawnSpellBurstAtTile(ev.target.x, ev.target.y, abId, state.map, spectacle);
-      }
-      await sleep(hold);
+      // Full hold for melee/bow readability; magic already spent time on FX plan
+      await sleep(melee || bow ? hold : Math.max(hold * 0.55, 600));
       return;
     }
     if (ev.kind === 'hp' || ev.kind === 'mp' || ev.kind === 'status' || ev.kind === 'protect' || ev.kind === 'text') {
@@ -166,6 +181,7 @@ export class BattlePresentation {
     if (ev.kind === 'ko') {
       this.spawnFloater(ev.unitId, ev.text || 'KO', ev.color || '#fff');
       this.arena.playAnim(ev.unitId, 'hit', 400);
+      // Always ash dissolve — never skip to instant hide
       await this.arena.playAshKo(ev.unitId, KO_ASH_MS);
       await sleep(EVENT_GAP_MS);
       return;
@@ -201,15 +217,9 @@ export class BattlePresentation {
       // Show what is being cast with words
       this.spawnFloater(ev.unitId, name, summon ? '#ffaa44' : '#aaddff');
       this.arena.showCastBanner?.(name, hold);
-      const impactIds = this._impactUnitIds(state, ev);
-      for (const id of impactIds) {
-        this.arena.spawnSpellBurst(id, abId, spectacle);
-        this.arena.spawnCastFx(id, summon || spectacle.arenaWide);
-      }
-      if (ev.target) {
-        this.arena.spawnSpellBurstAtTile(ev.target.x, ev.target.y, abId, state.map, spectacle);
-        this.arena.spawnMagicSpectacle(ev.unitId, abId, spectacle, state.map, ev.target);
-      }
+      const impactIds = this._aoeImpactUnitIds(state, ev, ability);
+      const fxPlan = planAbilityFx(abId, spectacle, ev.target || null);
+      await this.arena.playAbilityFxPlan(fxPlan, ev.unitId, ev.target, state.map, impactIds);
       await sleep(hold);
       return;
     }
@@ -236,45 +246,67 @@ export class BattlePresentation {
       .map((u) => u.id);
   }
 
+  /** Expand impact units by ability AoE so multi-tile hits show per-target FX */
+  _aoeImpactUnitIds(state, ev, ability) {
+    if (!ev.target || !state?.units) return [];
+    if (!ability || !state.map) return this._impactUnitIds(state, ev);
+    const caster = state.units.find((u) => u.id === ev.unitId) || ev.target;
+    let tiles;
+    try {
+      tiles = aoeTiles(ability.aoe || 'single', ev.target, caster, ability.aoeSize || 0, state.map);
+    } catch {
+      tiles = [ev.target];
+    }
+    const set = new Set(tiles.map((t) => `${t.x},${t.y}`));
+    return state.units.filter((u) => set.has(`${u.x},${u.y}`)).map((u) => u.id);
+  }
+
   /**
-   * Sequential playback with slow defaults.
+   * Sequential playback with slow defaults. Queued so concurrent calls never drop walks.
    * @param {import('../core/match.js').MatchState} state
    * @param {number} [walkMs]
    */
-  async playEventsSinceCursor(state, walkMs = WALK_MS_PER_STEP) {
-    const list = state.events || [];
-    const fresh = list.slice(this._eventCursor);
-    this._eventCursor = list.length;
-    this.busy = true;
-    try {
-      for (const ev of fresh) {
-        await this.playOneEvent(ev, state, walkMs);
-        await sleep(EVENT_GAP_MS);
+  playEventsSinceCursor(state, walkMs = WALK_MS_PER_STEP) {
+    const run = async () => {
+      const list = state.events || [];
+      // Clamp cursor if state was replaced with fewer events
+      if (this._eventCursor > list.length) this._eventCursor = 0;
+      const fresh = list.slice(this._eventCursor);
+      this._eventCursor = list.length;
+      this._enterBusy();
+      try {
+        for (const ev of fresh) {
+          await this.playOneEvent(ev, state, walkMs);
+          await sleep(EVENT_GAP_MS);
+        }
+      } finally {
+        this._leaveBusy();
       }
-    } finally {
-      this.busy = false;
-    }
+    };
+    // Chain onto prior playback — late-game teleports often came from overlapping play
+    const next = this._playTail.then(run, run);
+    this._playTail = next.catch(() => {});
+    return next;
   }
 
-  /** @deprecated skips walks — avoid in production battle path */
+  /**
+   * @deprecated skips walks — MUST NOT be used on the live battle path.
+   * Retained only for legacy tests; production uses playEventsSinceCursor exclusively.
+   */
   consumeEvents(state) {
+    // Intentionally empty of walk-skipping side effects on battle UI:
+    // still advances cursor without playing (tests that assert deprecation path).
     const list = state.events || [];
-    const fresh = list.slice(this._eventCursor);
     this._eventCursor = list.length;
-    for (const ev of fresh) {
-      if (ev.kind === 'move') continue;
-      void this.playOneEvent(ev, state, 0);
-    }
   }
 
   async walkPath(unitId, path, map, msPerStep = WALK_MS_PER_STEP) {
     if (!path || path.length < 2) return;
-    this.busy = true;
+    // Do not toggle busy here — parent playEventsSinceCursor owns busy depth
     this.arena.playAnim(unitId, 'move', path.length * msPerStep);
     for (let i = 1; i < path.length; i++) {
       await this.arena.animateUnitStep(unitId, path[i - 1], path[i], map, msPerStep);
     }
-    this.busy = false;
   }
 
   spawnFloater(unitId, text, color) {

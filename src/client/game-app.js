@@ -34,6 +34,7 @@ import { ArenaRenderer } from './arena.js';
 import { BattlePresentation } from './battle-presentation.js';
 import { WALK_MS_PER_STEP, BATTLE_INTRO_MS } from './presentation-timing.js';
 import { audio } from './audio.js';
+import { TURN_FOCUS_ZOOM, shouldAutoOpenWaitFace } from './battle-ui.js';
 import { MSG } from '../net/protocol.js';
 import { buildUnitMesh } from './unit-mesh.js';
 import * as THREE from 'three';
@@ -149,8 +150,34 @@ export class GameApp {
       )
       .join('');
 
+    // Chip pickers stay in sticky header — no scroll needed for job/equip
+    const jobChips = Object.values(JOBS)
+      .map(
+        (j) =>
+          `<button type="button" class="chip ${j.id === slot.jobId ? 'active' : ''}" data-field="job" data-id="${j.id}">${escapeHtml(j.name)}</button>`
+      )
+      .join('');
+    const wepChips = opts.weapons
+      .map(
+        (w) =>
+          `<button type="button" class="chip ${w.id === slot.weaponId ? 'active' : ''}" data-field="wep" data-id="${w.id}" title="${w.gilCost}g">${escapeHtml(w.name)} <small>${w.atk}</small></button>`
+      )
+      .join('');
+    const armChips = opts.armor
+      .map(
+        (a) =>
+          `<button type="button" class="chip ${a.id === slot.armorId ? 'active' : ''}" data-field="arm" data-id="${a.id}" title="${a.gilCost}g">${escapeHtml(a.name)}</button>`
+      )
+      .join('');
+    const accChips = opts.accessories
+      .map(
+        (a) =>
+          `<button type="button" class="chip ${a.id === (slot.accessoryId || 'none') ? 'active' : ''}" data-field="acc" data-id="${a.id}">${escapeHtml(a.name)}</button>`
+      )
+      .join('');
+
     this.screens.innerHTML = `
-      <section class="panel loadout-panel wide fft-panel loadout-sticky-layout" id="loadout-screen">
+      <section class="panel loadout-panel wide fft-panel loadout-sticky-layout loadout-noscroll" id="loadout-screen">
         <div class="loadout-sticky-top" id="loadout-sticky-top">
           <h2>Formation — Gil Shop</h2>
           <div class="gil-bar ${budget.ok ? '' : 'over'}" id="gil-bar">
@@ -178,50 +205,58 @@ export class GameApp {
                 <tr><td>PA</td><td id="st-pa">${s.pa}${deltaSpan(this._statDeltaFlash, 'pa')}</td><td>MA</td><td id="st-ma">${s.ma}${deltaSpan(this._statDeltaFlash, 'ma')}</td></tr>
                 <tr><td>Wpn ATK</td><td id="st-watk">${s.weaponAtk}${deltaSpan(this._statDeltaFlash, 'weaponAtk')}</td><td>Wpn Rng</td><td id="st-wrng">${escapeHtml(s.weaponRange)}</td></tr>
               </table>
-              <p class="hint">Kit: ${escapeHtml(preview.visual.silhouette)} · ${escapeHtml(preview.visual.weaponAttach)} · ${escapeHtml(preview.weapon?.name || '')} · <strong id="unit-gil">${preview.gilCost}g</strong></p>
+              <p class="hint">Kit: ${escapeHtml(preview.visual.silhouette)} · ${escapeHtml(preview.weapon?.name || '')} · <strong id="unit-gil">${preview.gilCost}g</strong></p>
+            </div>
+          </div>
+          <div class="loadout-chip-pickers" id="loadout-chip-pickers">
+            <div class="chip-row">
+              <span class="chip-label">Job</span>
+              <div class="chip-scroll" id="chips-job">${jobChips}</div>
+            </div>
+            <div class="chip-row">
+              <span class="chip-label">Weapon</span>
+              <div class="chip-scroll" id="chips-wep">${wepChips}</div>
+            </div>
+            <div class="chip-row">
+              <span class="chip-label">Armor</span>
+              <div class="chip-scroll" id="chips-arm">${armChips}</div>
+            </div>
+            <div class="chip-row">
+              <span class="chip-label">Acc</span>
+              <div class="chip-scroll" id="chips-acc">${accChips}</div>
+            </div>
+            <div class="chip-row meta-row">
+              <label class="inline-field">Name <input id="lo-name" value="${escapeHtml(slot.name)}" /></label>
+              <label class="inline-field">Gender
+                <select id="lo-gender">
+                  <option value="m" ${slot.gender !== 'f' ? 'selected' : ''}>M</option>
+                  <option value="f" ${slot.gender === 'f' ? 'selected' : ''}>F</option>
+                </select>
+              </label>
+              <label class="inline-field">2nd
+                <select id="lo-sec">${secOpts}</select>
+              </label>
+            </div>
+            <!-- Hidden selects kept for _commitLoadoutForm compatibility -->
+            <select id="lo-job" class="sr-only" aria-hidden="true">${jobOpts}</select>
+            <select id="lo-wep" class="sr-only" aria-hidden="true">${wOpts}</select>
+            <select id="lo-arm" class="sr-only" aria-hidden="true">${aOpts}</select>
+            <select id="lo-acc" class="sr-only" aria-hidden="true">${xOpts}</select>
+            <div class="row loadout-actions-sticky">
+              <button type="button" id="lo-save" class="btn primary">Save</button>
+              <button type="button" id="lo-done" class="btn" ${budget.ok ? '' : 'disabled'}>${
+                this._loadoutNext === 'ai' ? 'Start vs AI' : this._loadoutNext === 'online' ? 'Continue Online' : 'Back'
+              }</button>
             </div>
           </div>
         </div>
 
         <div class="loadout-scroll-body">
-          <div class="loadout-grid two">
-            <div class="loadout-form">
-              <label>Name <input id="lo-name" value="${escapeHtml(slot.name)}" /></label>
-              <label>Gender
-                <select id="lo-gender">
-                  <option value="m" ${slot.gender !== 'f' ? 'selected' : ''}>Male</option>
-                  <option value="f" ${slot.gender === 'f' ? 'selected' : ''}>Female</option>
-                </select>
-              </label>
-              <label>Job <select id="lo-job">${jobOpts}</select></label>
-              <p class="job-desc">${escapeHtml(preview.jobDescription)}</p>
-              <label>Secondary skillset <select id="lo-sec">${secOpts}</select></label>
-              <label>
-                <span class="with-icon"><img class="item-icon" src="${preview.icons.weapon}" alt="" width="36" height="36"/> Weapon</span>
-                <select id="lo-wep">${wOpts}</select>
-              </label>
-              <p class="eq-desc">${escapeHtml(preview.equipmentNotes.weapon)} · <strong>${preview.weapon?.gilCost ?? 0}g</strong></p>
-              <label>
-                <span class="with-icon"><img class="item-icon" src="${preview.icons.armor}" alt="" width="36" height="36"/> Armor</span>
-                <select id="lo-arm">${aOpts}</select>
-              </label>
-              <p class="eq-desc">${escapeHtml(preview.equipmentNotes.armor)} · <strong>${preview.armor?.gilCost ?? 0}g</strong></p>
-              <label>
-                <span class="with-icon"><img class="item-icon" src="${preview.icons.accessory}" alt="" width="36" height="36"/> Accessory</span>
-                <select id="lo-acc">${xOpts}</select>
-              </label>
-              <p class="eq-desc">${escapeHtml(preview.equipmentNotes.accessory)} · <strong>${preview.accessory?.gilCost ?? 0}g</strong></p>
-            </div>
-            <div class="skill-panel" id="skill-panel">
-              <h3>Skills &amp; Magic (${preview.abilities.length})</h3>
-              <div class="skill-list">${skillCards}</div>
-            </div>
-          </div>
-          <div class="row">
-            <button type="button" id="lo-save" class="btn primary">Save unit</button>
-            <button type="button" id="lo-done" class="btn" ${budget.ok ? '' : 'disabled'}>${
-              this._loadoutNext === 'ai' ? 'Start vs AI' : this._loadoutNext === 'online' ? 'Continue Online' : 'Back'
-            }</button>
+          <p class="job-desc">${escapeHtml(preview.jobDescription)}</p>
+          <p class="eq-desc">${escapeHtml(preview.equipmentNotes.weapon)} · ${escapeHtml(preview.equipmentNotes.armor)}</p>
+          <div class="skill-panel" id="skill-panel">
+            <h3>Skills &amp; Magic (${preview.abilities.length})</h3>
+            <div class="skill-list">${skillCards}</div>
           </div>
         </div>
       </section>
@@ -257,6 +292,20 @@ export class GameApp {
     });
     ['lo-job', 'lo-sec', 'lo-wep', 'lo-arm', 'lo-acc', 'lo-gender'].forEach((id) => {
       this.screens.querySelector('#' + id)?.addEventListener('change', refresh);
+    });
+    // Chip pickers — primary formation UI without scrolling
+    this.screens.querySelectorAll('.chip[data-field]').forEach((btn) => {
+      btn.onclick = () => {
+        const field = btn.getAttribute('data-field');
+        const id = btn.getAttribute('data-id');
+        const map = { job: 'lo-job', wep: 'lo-wep', arm: 'lo-arm', acc: 'lo-acc' };
+        const sel = this.screens.querySelector('#' + map[field]);
+        if (sel) {
+          sel.value = id;
+          sel.dispatchEvent(new Event('change'));
+        }
+        audio.sfx('select');
+      };
     });
     this.screens.querySelector('#lo-save').onclick = () => {
       this._commitLoadoutForm();
@@ -421,6 +470,11 @@ export class GameApp {
             <div id="float-layer" class="float-layer"></div>
             <div id="battle-banner" class="battle-banner hidden"></div>
             <div id="cast-name-banner" class="cast-name-banner" aria-live="polite"></div>
+            <!-- Fixed right chrome: always visible on mobile without scroll -->
+            <div id="battle-action-chrome" class="battle-action-chrome" aria-label="Battle actions">
+              <div id="hud-actions" class="hud-block actions chrome-actions"></div>
+              <div id="hud-wait-face" class="hud-block chrome-wait-face hidden"></div>
+            </div>
           </div>
           <div id="bottom-unit-panel" class="bottom-unit-panel" aria-label="Unit status">
             <em>Active / selected unit status appears here</em>
@@ -429,8 +483,7 @@ export class GameApp {
         <aside class="hud action-rail">
           <div id="hud-turn" class="hud-block"></div>
           <div id="hud-ct" class="hud-block ct-list"></div>
-          <div id="hud-actions" class="hud-block actions"></div>
-          <div id="hud-wait-face" class="hud-block hidden"></div>
+          <div id="hud-actions-rail-mirror" class="hud-block actions desktop-actions-mirror" aria-hidden="true"></div>
           <div id="hud-log" class="hud-block log"></div>
           <div class="cam-controls">
             <p class="hint cam-help">Slow sequential battle · Drag orbit · Wait = face</p>
@@ -533,8 +586,14 @@ export class GameApp {
       // Autopan/autorotate so active unit is centered and front-facing (once per turn id)
       if (this._lastFocusedTurnId !== active.id && !this.pres?.busy) {
         this._lastFocusedTurnId = active.id;
-        void this.arena.focusOnUnit(active.id, { facing: active.facing || 'S', zoom: 6.5, ms: 800 });
+        void this.arena.focusOnUnit(active.id, {
+          facing: active.facing || 'S',
+          zoom: TURN_FOCUS_ZOOM,
+          ms: 800,
+        });
       }
+      // Progressive BGM intensity toward endgame
+      audio.setBattleProgress?.(this.match);
     } else if (this.match.phase === 'victory') {
       turnEl.innerHTML = '<strong>Victory!</strong>';
       this.arena.setActiveHighlight(null);
@@ -570,10 +629,34 @@ export class GameApp {
 
     // Command bar always visible (Move / Ability / Wait + open submenu)
     this._renderCommandBar();
+    // After Act only Wait remains → auto-open Wait/Face (visible in fixed chrome)
+    this._maybeAutoWaitFace();
+  }
+
+  /**
+   * When Act is done and player can still control, open Wait/Face automatically.
+   */
+  _maybeAutoWaitFace() {
+    if (!this.match) return;
+    const active = getUnit(this.match, this.match.activeUnitId);
+    const canControl =
+      this.match.phase === 'battle' && active && this._canControl(active) && !this.pres?.busy;
+    if (
+      canControl &&
+      this.uiMode !== 'wait-face' &&
+      shouldAutoOpenWaitFace(this.match.turn, {
+        canControl: true,
+        phase: this.match.phase,
+        busy: !!this.pres?.busy,
+      })
+    ) {
+      this.enterWaitFace();
+    }
   }
 
   /**
    * Move / Ability / Wait always visible on controllable turns; submenu stays mounted.
+   * Mounted in fixed #battle-action-chrome (right hover) so mobile never scrolls for actions.
    */
   _renderCommandBar() {
     const actEl = this.screens.querySelector('#hud-actions');
@@ -915,6 +998,7 @@ export class GameApp {
         action.ctNumber = this._mathCtNumber;
       }
       await this.submitAction(action);
+      // After act, prefer auto Wait/Face rather than idle (if turn still ours)
       this.uiMode = 'idle';
       this.selectedAbility = null;
       this._hoverAoeTile = null;
@@ -927,6 +1011,10 @@ export class GameApp {
       this.ws.send(JSON.stringify({ type: MSG.ACTION, action }));
       return;
     }
+    // Serialize actions while presentation is busy — prevent stacked skip/teleport
+    if (this.pres?.busy) {
+      await this.pres._playTail.catch(() => {});
+    }
     const evBefore = this.match.events?.length || 0;
     const r = applyAction(this.match, action);
     if (!r.ok) {
@@ -934,10 +1022,9 @@ export class GameApp {
       return;
     }
 
-    // All presentation (including attacker swing) comes from match events via playEventsSinceCursor
-    // so AI/online/player share the same sequential attack → hit path. No fire-and-forget playAnim.
+    // All presentation via playEventsSinceCursor only (never consumeEvents — that teleports)
     if (this.pres) {
-      this.pres._eventCursor = evBefore;
+      this.pres._eventCursor = Math.min(evBefore, this.match.events?.length || 0);
       await this.pres.playEventsSinceCursor(this.match, WALK_MS_PER_STEP);
     }
 
@@ -945,8 +1032,16 @@ export class GameApp {
       const ev0 = this.match.events?.length || 0;
       playEnemyTurns(this.match, this.difficulty);
       if (this.pres) {
-        this.pres._eventCursor = ev0;
+        this.pres._eventCursor = Math.min(ev0, this.match.events?.length || 0);
         await this.pres.playEventsSinceCursor(this.match, WALK_MS_PER_STEP);
+      }
+    }
+
+    // If we just acted and still control this unit, open Wait/Face immediately
+    if (action.type === 'act' && this.match.turn?.acted && !this.match.turn?.unitEnded) {
+      const active = getUnit(this.match, this.match.activeUnitId);
+      if (active && this._canControl(active) && this.match.phase === 'battle') {
+        this.uiMode = 'wait-face';
       }
     }
 

@@ -362,7 +362,8 @@ export class ArenaRenderer {
     const unitYaw = faceYaw[facing] ?? 0;
     // Camera azimuth so we look toward the unit's face
     const rotY = unitYaw + Math.PI; // look from in front
-    const zoom = opts.zoom ?? 6.5;
+    // Closer than prior 6.5 default, still above ZOOM_MIN
+    const zoom = opts.zoom ?? 4.2;
     return this.animateCameraTo(
       {
         lookAt: { x: mesh.position.x, y: (mesh.userData.baseY || mesh.position.y) + 0.4, z: mesh.position.z },
@@ -402,7 +403,7 @@ export class ArenaRenderer {
       };
       requestAnimationFrame(spin);
     });
-    await this.focusOnUnit(firstUnitId, { facing, zoom: 7, ms: Math.floor(ms * 0.5) });
+    await this.focusOnUnit(firstUnitId, { facing, zoom: 5.5, ms: Math.floor(ms * 0.5) });
   }
 
   /**
@@ -1022,41 +1023,53 @@ export class ArenaRenderer {
   playAshKo(unitId, ms = 1600) {
     const mesh = this.unitMeshes.get(unitId);
     if (!mesh) return Promise.resolve();
+    // Revive visibility if a prior refresh hid the corpse early
     mesh.visible = true;
-    mesh.userData.koUntil = performance.now() + ms + 200;
+    mesh.userData.ashed = false;
     mesh.userData.fallen = false;
+    mesh.userData.koUntil = performance.now() + ms + 400;
+    mesh.scale.setScalar(1);
     this.unitAnims.set(unitId, { anim: 'hit', until: performance.now() + ms });
 
-    // Ash particle cloud
+    // Clone materials so fade does not break other units sharing mats
+    mesh.traverse((o) => {
+      if (o.isMesh && o.material) {
+        o.material = o.material.clone();
+        o.material.transparent = true;
+      }
+    });
+
+    // Dense ash particle cloud
     const particles = [];
-    for (let i = 0; i < 28; i++) {
+    for (let i = 0; i < 42; i++) {
       const p = new THREE.Mesh(
-        new THREE.SphereGeometry(0.04 + Math.random() * 0.05, 4, 4),
+        new THREE.SphereGeometry(0.035 + Math.random() * 0.06, 4, 4),
         new THREE.MeshBasicMaterial({
-          color: 0x9a9a9a,
+          color: i % 3 === 0 ? 0x666666 : 0xaaaaaa,
           transparent: true,
-          opacity: 0.9,
+          opacity: 0.95,
         })
       );
       p.position.copy(mesh.position);
-      p.position.y += 0.3 + Math.random() * 0.5;
-      p.userData.vx = (Math.random() - 0.5) * 0.02;
-      p.userData.vy = 0.01 + Math.random() * 0.025;
-      p.userData.vz = (Math.random() - 0.5) * 0.02;
+      p.position.y += 0.2 + Math.random() * 0.7;
+      p.position.x += (Math.random() - 0.5) * 0.25;
+      p.position.z += (Math.random() - 0.5) * 0.25;
+      p.userData.vx = (Math.random() - 0.5) * 0.03;
+      p.userData.vy = 0.012 + Math.random() * 0.03;
+      p.userData.vz = (Math.random() - 0.5) * 0.03;
       this.fxGroup.add(p);
       particles.push(p);
     }
 
     const t0 = performance.now();
-    const base = mesh.userData.baseY || 0.4;
+    const base = mesh.userData.baseY || mesh.position.y || 0.4;
     return new Promise((resolve) => {
       const anim = () => {
         const u = Math.min(1, (performance.now() - t0) / ms);
         mesh.visible = true;
-        // collapse + fade body
-        mesh.rotation.z = (Math.PI / 2) * Math.min(1, u * 1.2);
-        mesh.position.y = base * (1 - u * 0.7);
-        mesh.scale.setScalar(Math.max(0.05, 1 - u));
+        mesh.rotation.z = (Math.PI / 2) * Math.min(1, u * 1.25);
+        mesh.position.y = base * (1 - u * 0.75);
+        mesh.scale.setScalar(Math.max(0.04, 1 - u));
         mesh.traverse((o) => {
           if (o.material && o.material.opacity != null) {
             o.material.transparent = true;
@@ -1067,7 +1080,7 @@ export class ArenaRenderer {
           p.position.x += p.userData.vx;
           p.position.y += p.userData.vy;
           p.position.z += p.userData.vz;
-          p.material.opacity = 0.9 * (1 - u);
+          p.material.opacity = 0.95 * (1 - u);
         }
         if (u < 1) {
           requestAnimationFrame(anim);
@@ -1081,6 +1094,285 @@ export class ArenaRenderer {
       };
       anim();
     });
+  }
+
+  /**
+   * Screen/board shake for arena-wide residual FX.
+   * @param {number} [ms=500]
+   * @param {number} [amp=0.12]
+   */
+  shakeCamera(ms = 500, amp = 0.12) {
+    const origin = this.lookAt.clone();
+    const t0 = performance.now();
+    const step = () => {
+      const u = (performance.now() - t0) / ms;
+      if (u >= 1) {
+        this.lookAt.copy(origin);
+        this._updateCamera();
+        return;
+      }
+      const a = amp * (1 - u);
+      this.lookAt.set(
+        origin.x + (Math.random() - 0.5) * a * 2,
+        origin.y + (Math.random() - 0.5) * a,
+        origin.z + (Math.random() - 0.5) * a * 2
+      );
+      this._updateCamera();
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  /**
+   * Procedural summon creature silhouette at target, then impact.
+   * @param {object} creature from resolveSummonCreature
+   * @param {{x:number,y:number}} target
+   * @param {import('../core/grid.js').GridMap} map
+   * @param {number} [ms=1400]
+   */
+  spawnSummonCreature(creature, target, map, ms = 1400) {
+    if (!creature || !target) return Promise.resolve();
+    let h = 0.4;
+    if (map?.tiles?.[target.y]?.[target.x]) {
+      const t = map.tiles[target.y][target.x];
+      h = t.terrain === 'water' ? 0.15 : t.terrain === 'bridge' ? 0.45 : t.height * 0.48 + 0.35;
+    }
+    const root = new THREE.Group();
+    root.position.set(target.x, h, target.y);
+    const color = creature.color ?? 0xaa66ff;
+    const secondary = creature.secondary ?? 0xffee88;
+    const ht = creature.height ?? 1.5;
+    // Body
+    if (creature.silhouette === 'beast') {
+      const body = new THREE.Mesh(
+        new THREE.SphereGeometry(0.35, 10, 10),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 })
+      );
+      body.position.y = ht * 0.35;
+      body.scale.set(1.2, 0.9, 1.4);
+      const head = new THREE.Mesh(
+        new THREE.ConeGeometry(0.22, 0.5, 8),
+        new THREE.MeshBasicMaterial({ color: secondary, transparent: true, opacity: 0.95 })
+      );
+      head.position.set(0, ht * 0.7, 0.25);
+      head.rotation.x = Math.PI / 2;
+      root.add(body, head);
+    } else if (creature.silhouette === 'cute') {
+      const body = new THREE.Mesh(
+        new THREE.SphereGeometry(0.28, 10, 10),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95 })
+      );
+      body.position.y = ht * 0.4;
+      const pom = new THREE.Mesh(
+        new THREE.SphereGeometry(0.1, 8, 8),
+        new THREE.MeshBasicMaterial({ color: secondary })
+      );
+      pom.position.y = ht * 0.75;
+      root.add(body, pom);
+    } else {
+      // humanoid / ethereal
+      const torso = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.18, ht * 0.45, 4, 8),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 })
+      );
+      torso.position.y = ht * 0.45;
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.14, 10, 10),
+        new THREE.MeshBasicMaterial({ color: secondary, transparent: true, opacity: 0.95 })
+      );
+      head.position.y = ht * 0.85;
+      root.add(torso, head);
+    }
+    // Glow ring
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.45, 0.05, 8, 24),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85 })
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.08;
+    root.add(ring);
+    this.fxGroup.add(root);
+    root.scale.setScalar(0.2);
+    const t0 = performance.now();
+    return new Promise((resolve) => {
+      const step = () => {
+        const u = Math.min(1, (performance.now() - t0) / ms);
+        if (u < 0.35) {
+          root.scale.setScalar(0.2 + (u / 0.35) * 0.9);
+          root.position.y = h + (1 - u / 0.35) * 1.2;
+        } else if (u < 0.7) {
+          root.scale.setScalar(1.1 + Math.sin(u * 20) * 0.08);
+          root.rotation.y = u * 4;
+        } else {
+          root.scale.setScalar(1.1 * (1 - (u - 0.7) / 0.3));
+          root.traverse((o) => {
+            if (o.material?.opacity != null) o.material.opacity = 0.9 * (1 - (u - 0.7) / 0.3);
+          });
+        }
+        if (u < 1) requestAnimationFrame(step);
+        else {
+          this.fxGroup.remove(root);
+          resolve();
+        }
+      };
+      requestAnimationFrame(step);
+    });
+  }
+
+  /**
+   * Spell bolt from caster to target tile (direct hit).
+   */
+  spawnSpellProjectile(fromUnitId, target, map, color = 0x66ccff, ms = 700) {
+    const mesh = this.unitMeshes.get(fromUnitId);
+    if (!mesh || !target) return Promise.resolve();
+    let h1 = 0.5;
+    if (map?.tiles?.[target.y]?.[target.x]) {
+      const t = map.tiles[target.y][target.x];
+      h1 = t.terrain === 'water' ? 0.2 : t.terrain === 'bridge' ? 0.45 : t.height * 0.48 + 0.4;
+    }
+    const start = mesh.position.clone();
+    start.y += 0.8;
+    const end = new THREE.Vector3(target.x, h1, target.y);
+    const orb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.12, 10, 10),
+      new THREE.MeshBasicMaterial({ color })
+    );
+    orb.position.copy(start);
+    this.fxGroup.add(orb);
+    const t0 = performance.now();
+    return new Promise((resolve) => {
+      const step = () => {
+        const u = Math.min(1, (performance.now() - t0) / ms);
+        const s = u * u * (3 - 2 * u);
+        orb.position.lerpVectors(start, end, s);
+        orb.position.y += Math.sin(s * Math.PI) * 0.5;
+        if (u < 1) requestAnimationFrame(step);
+        else {
+          this.fxGroup.remove(orb);
+          resolve();
+        }
+      };
+      requestAnimationFrame(step);
+    });
+  }
+
+  /**
+   * Residual ambient FX: smoke, debris, explosions around a point (arena-wide layer).
+   */
+  spawnResidualFx(x, y, map, color = 0xff8844, intensity = 1) {
+    let h = 0.3;
+    if (map?.tiles?.[y]?.[x]) {
+      const t = map.tiles[y][x];
+      h = t.terrain === 'water' ? 0.15 : t.height * 0.48 + 0.3;
+    }
+    // Smoke puffs
+    for (let i = 0; i < 6 + Math.floor(intensity * 3); i++) {
+      const smoke = new THREE.Mesh(
+        new THREE.SphereGeometry(0.15 + Math.random() * 0.2, 6, 6),
+        new THREE.MeshBasicMaterial({ color: 0x555555, transparent: true, opacity: 0.45 })
+      );
+      smoke.position.set(x + (Math.random() - 0.5) * 2.5 * intensity, h + 0.3, y + (Math.random() - 0.5) * 2.5 * intensity);
+      this.fxGroup.add(smoke);
+      const t0 = performance.now();
+      const anim = () => {
+        const u = (performance.now() - t0) / 900;
+        if (u >= 1) {
+          this.fxGroup.remove(smoke);
+          return;
+        }
+        smoke.position.y += 0.012;
+        smoke.scale.setScalar(1 + u * 2);
+        smoke.material.opacity = 0.45 * (1 - u);
+        requestAnimationFrame(anim);
+      };
+      anim();
+    }
+    // Debris sparks
+    for (let i = 0; i < 8; i++) {
+      const d = new THREE.Mesh(
+        new THREE.BoxGeometry(0.06, 0.06, 0.06),
+        new THREE.MeshBasicMaterial({ color })
+      );
+      d.position.set(x, h + 0.4, y);
+      d.userData.v = new THREE.Vector3((Math.random() - 0.5) * 0.08, 0.04 + Math.random() * 0.05, (Math.random() - 0.5) * 0.08);
+      this.fxGroup.add(d);
+      const t0 = performance.now();
+      const anim = () => {
+        const u = (performance.now() - t0) / 700;
+        if (u >= 1) {
+          this.fxGroup.remove(d);
+          return;
+        }
+        d.position.add(d.userData.v);
+        d.userData.v.y -= 0.003;
+        d.material.opacity = 1 - u;
+        d.material.transparent = true;
+        requestAnimationFrame(anim);
+      };
+      anim();
+    }
+    // Ground explosion ring
+    const boom = new THREE.Mesh(
+      new THREE.RingGeometry(0.2, 0.5, 20),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, side: THREE.DoubleSide })
+    );
+    boom.rotation.x = -Math.PI / 2;
+    boom.position.set(x, h + 0.05, y);
+    this.fxGroup.add(boom);
+    const t0 = performance.now();
+    const anim = () => {
+      const u = (performance.now() - t0) / 600;
+      if (u >= 1) {
+        this.fxGroup.remove(boom);
+        return;
+      }
+      boom.scale.setScalar(1 + u * 5 * intensity);
+      boom.material.opacity = 0.7 * (1 - u);
+      requestAnimationFrame(anim);
+    };
+    anim();
+  }
+
+  /**
+   * Full ability FX plan: direct target hit + optional creature + residual/shake.
+   * @param {import('./fx-plan.js').planAbilityFx extends Function} plan
+   */
+  async playAbilityFxPlan(plan, casterId, target, map, impactUnitIds = []) {
+    if (!plan) return;
+    // Direct projectile toward target
+    if (plan.projectile && target && casterId && !plan.summon) {
+      await this.spawnSpellProjectile(casterId, target, map, plan.color, 550);
+    }
+    // Unique summon creature at target
+    if (plan.creature && target) {
+      void this.spawnSummonCreature(plan.creature, target, map, 1500);
+    }
+    // Direct hits on each impact unit
+    for (const id of impactUnitIds) {
+      this.spawnSpellBurst(id, plan.abilityId, {
+        intensity: plan.intensity,
+        arenaWide: false,
+        rings: plan.summon ? 4 : 2,
+      });
+      this.spawnHitFx(id);
+      this.playAnim(id, 'hit', 700);
+    }
+    if (target) {
+      this.spawnSpellBurstAtTile(target.x, target.y, plan.abilityId, map, {
+        intensity: plan.intensity,
+        arenaWide: false,
+        rings: 3,
+      });
+    }
+    // Residual ambient layer when arena-wide / high intensity
+    if (plan.residual && target) {
+      this.spawnResidualFx(target.x, target.y, map, plan.color, plan.intensity);
+      // Secondary residual at map center for whole-board feel
+      if (map) {
+        this.spawnResidualFx((map.width - 1) / 2, (map.height - 1) / 2, map, plan.color, plan.intensity * 0.7);
+      }
+    }
+    if (plan.shake) this.shakeCamera(plan.summon ? 700 : 450, plan.summon ? 0.2 : 0.12);
   }
 
   /**

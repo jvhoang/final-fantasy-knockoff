@@ -809,12 +809,181 @@ select {
   display: none;
 }
 
+/* Fixed floating action chrome — always on-screen (esp. iPhone) */
+.battle-action-chrome {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  width: min(168px, 42vw);
+  max-height: 88%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  pointer-events: none;
+}
+
+.battle-action-chrome .hud-block,
+.battle-action-chrome .btn {
+  pointer-events: auto;
+}
+
+.chrome-actions,
+.chrome-wait-face {
+  background: rgba(8, 22, 28, 0.92);
+  border: 1px solid var(--accent);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+.chrome-wait-face {
+  font-size: 0.78rem;
+}
+
+.chrome-wait-face .face-pad {
+  transform: scale(0.95);
+  transform-origin: top center;
+}
+
+.desktop-actions-mirror {
+  display: none;
+}
+
+/* Formation chip pickers — primary equip UI without page scroll */
+.loadout-chip-pickers {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.chip-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.chip-label {
+  flex: 0 0 3.2rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  padding-top: 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chip-scroll {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  flex: 1;
+  max-height: 4.8rem;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chip {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.28rem 0.55rem;
+  font-size: 0.72rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chip.active {
+  border-color: var(--accent);
+  background: rgba(62, 207, 191, 0.2);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.chip small {
+  opacity: 0.75;
+  margin-left: 0.15rem;
+}
+
+.meta-row {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  margin: 0;
+}
+
+.inline-field input,
+.inline-field select {
+  max-width: 7rem;
+  font-size: 0.78rem;
+}
+
+.loadout-actions-sticky {
+  margin-top: 0.35rem;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+.loadout-noscroll .loadout-sticky-top {
+  max-height: none;
+}
+
+.loadout-noscroll .loadout-scroll-body {
+  max-height: 28vh;
+}
+
 @media (max-width: 800px) {
   .battle-layout {
     grid-template-columns: 1fr;
     height: auto;
   }
-  .arena-host {
-    height: 50vh;
+  .battle-layout-v2 {
+    height: auto;
+    min-height: calc(100dvh - 70px);
+  }
+  .arena-host,
+  .battle-main .arena-wrap {
+    height: min(62dvh, 520px);
+    min-height: 280px;
+  }
+  .action-rail {
+    display: none; /* actions live in fixed chrome on mobile */
+  }
+  .battle-action-chrome {
+    right: 0.25rem;
+    width: min(150px, 40vw);
+  }
+  .bottom-unit-panel {
+    max-height: 110px;
+    min-height: 80px;
+    font-size: 0.75rem;
+  }
+  .loadout-noscroll .loadout-scroll-body {
+    max-height: 22vh;
+  }
+}
+
+@media (min-width: 801px) {
+  .battle-action-chrome {
+    /* Still pin over arena on desktop for consistency */
+    width: 180px;
   }
 }
