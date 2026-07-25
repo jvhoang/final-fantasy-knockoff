@@ -1146,7 +1146,7 @@ export class GameApp {
       if (seat) this.onlineTeam = seat.team;
       if (msg.room.match) {
         const prevMatchId = this.match?.id;
-        const prevCursor = this.pres?._eventCursor ?? 0;
+        const prevSeq = this.pres?._lastPlayedSeq ?? 0;
         this.match = msg.room.match;
         if (this.mode !== 'battle') {
           this.mode = 'battle';
@@ -1160,11 +1160,9 @@ export class GameApp {
           await this.pres.waitUntilIdle();
           if (this.match.id !== prevMatchId) {
             this.pres.resetEvents({ events: [] });
-          } else if (this.pres._eventCursor > (this.match.events?.length || 0)) {
-            this.pres._eventCursor = 0;
           } else {
-            // Keep claimed cursor — never rewind below what we already played
-            this.pres._eventCursor = Math.max(prevCursor, this.pres._eventCursor);
+            // Never rewind seq — claimEventsAfterSeq uses monotonic event.seq
+            this.pres._lastPlayedSeq = Math.max(prevSeq, this.pres._lastPlayedSeq || 0);
           }
           await this.pres.playEventsSinceCursor(this.match, WALK_MS_PER_STEP);
         }

@@ -3,8 +3,14 @@
  */
 
 /**
+ * Soft cap on retained event objects (memory). Playback uses monotonic `seq`,
+ * not array index, so prune never desyncs the presentation cursor.
+ */
+export const EVENT_LOG_MAX = 200;
+
+/**
  * @typedef {{
- *   kind: 'hp'|'mp'|'status'|'ko'|'cast_start'|'cast_resolve'|'move'|'protect'|'text',
+ *   kind: 'hp'|'mp'|'status'|'ko'|'cast_start'|'cast_resolve'|'move'|'protect'|'text'|'attack'|'act'|'cast'|'summon',
  *   unitId: string,
  *   amount?: number,
  *   text?: string,
@@ -12,6 +18,8 @@
  *   abilityId?: string,
  *   path?: {x:number,y:number}[],
  *   fromCharge?: boolean,
+ *   seq?: number,
+ *   id?: string,
  * }} BattleEvent
  */
 
@@ -21,9 +29,52 @@
  */
 export function pushEvent(state, ev) {
   if (!state.events) state.events = [];
-  state.events.push({ ...ev, id: `ev-${state.events.length}-${Date.now()}` });
-  // Keep last N for clients
-  if (state.events.length > 80) state.events.splice(0, state.events.length - 80);
+  if (typeof state.eventSeq !== 'number') state.eventSeq = 0;
+  state.eventSeq += 1;
+  const seq = state.eventSeq;
+  state.events.push({
+    ...ev,
+    seq,
+    id: `ev-${seq}`,
+  });
+  // Keep last N for memory — presentation tracks by seq, not index
+  if (state.events.length > EVENT_LOG_MAX) {
+    state.events.splice(0, state.events.length - EVENT_LOG_MAX);
+  }
+}
+
+/**
+ * Events with seq strictly greater than afterSeq (presentation claim helper).
+ * @param {import('./match.js').MatchState|{ events?: BattleEvent[] }} state
+ * @param {number} afterSeq
+ * @returns {BattleEvent[]}
+ */
+export function eventsAfterSeq(state, afterSeq = 0) {
+  const list = state.events || [];
+  const min = Number(afterSeq) || 0;
+  return list.filter((e) => (e.seq ?? 0) > min);
+}
+
+/**
+ * Pure claim: which events to play + next lastPlayedSeq.
+ * @param {BattleEvent[]} events
+ * @param {number} lastPlayedSeq
+ */
+export function claimEventsAfterSeq(events, lastPlayedSeq = 0) {
+  const list = events || [];
+  const min = Number(lastPlayedSeq) || 0;
+  const hasSeq = list.some((e) => e.seq != null);
+  if (hasSeq) {
+    const fresh = list.filter((e) => (e.seq ?? 0) > min);
+    const nextSeq = fresh.length
+      ? Math.max(min, ...fresh.map((e) => e.seq ?? min))
+      : min;
+    return { fresh, nextSeq, mode: 'seq' };
+  }
+  // Index fallback for synthetic tests that skip pushEvent
+  const from = Math.min(Math.max(0, min), list.length);
+  const fresh = list.slice(from);
+  return { fresh, nextSeq: list.length, mode: 'index' };
 }
 
 /**

@@ -21,6 +21,7 @@ import { getAbility } from '../content/abilities.js';
 import { audio } from './audio.js';
 import { planAbilityFx } from './fx-plan.js';
 import { aoeTiles } from '../core/grid.js';
+import { claimEventsAfterSeq } from '../core/battle-events.js';
 
 /**
  * Whether a combat floater should be suppressed (MP cost deductions).
@@ -68,13 +69,24 @@ export class BattlePresentation {
     this.floaters = [];
     this.busy = false;
     this._busyDepth = 0;
+    /** @deprecated index cursor — kept in sync for diagnostics; playback uses _lastPlayedSeq */
     this._eventCursor = 0;
+    /** Monotonic seq of last claimed/played event (survives event-log prune) */
+    this._lastPlayedSeq = 0;
     /** Serialize concurrent playEventsSinceCursor so late-game anims never skip */
     this._playTail = Promise.resolve();
   }
 
   resetEvents(state) {
-    this._eventCursor = state?.events?.length || 0;
+    const list = state?.events || [];
+    this._eventCursor = list.length;
+    // Highest seq already present is "played" for a fresh viewer of current buffer only;
+    // full reset (new battle) should pass empty events.
+    let maxSeq = 0;
+    for (const e of list) {
+      if (e.seq != null && e.seq > maxSeq) maxSeq = e.seq;
+    }
+    this._lastPlayedSeq = maxSeq;
   }
 
   _enterBusy() {
@@ -272,20 +284,18 @@ export class BattlePresentation {
   }
 
   /**
-   * Sequential playback. Claims event range immediately so concurrent callers
-   * never both slice the same events (late-game teleport root cause).
+   * Sequential playback. Claims by monotonic event.seq (not array index) so
+   * pushEvent log prune cannot leave the cursor past the end of the buffer.
    * @param {import('../core/match.js').MatchState} state
    * @param {number} [walkMs]
    */
   playEventsSinceCursor(state, walkMs = WALK_MS_PER_STEP) {
     const list = state.events || [];
-    // Clamp if match was replaced with fewer events
-    if (this._eventCursor > list.length) this._eventCursor = 0;
-    const from = this._eventCursor;
-    const to = list.length;
+    const claim = claimEventsAfterSeq(list, this._lastPlayedSeq);
+    const fresh = claim.fresh;
     // Claim immediately at schedule time (before async gap)
-    this._eventCursor = to;
-    const fresh = list.slice(from, to);
+    this._lastPlayedSeq = claim.nextSeq;
+    this._eventCursor = list.length;
 
     const run = async () => {
       if (!fresh.length) return;
@@ -293,7 +303,6 @@ export class BattlePresentation {
       this.onBusyChange?.(true);
       try {
         for (const ev of fresh) {
-          // Always pass live state for unit positions, but play the claimed event snapshot
           await this.playOneEvent(ev, state, walkMs);
           await sleep(EVENT_GAP_MS);
         }
@@ -302,7 +311,6 @@ export class BattlePresentation {
         this.onBusyChange?.(this.busy);
       }
     };
-    // Chain onto prior playback — never run two slices in parallel
     const next = this._playTail.then(run, run);
     this._playTail = next.catch((err) => {
       if (err) console.error('[presentation]', err);
@@ -311,15 +319,20 @@ export class BattlePresentation {
   }
 
   /**
-   * Pure helper for tests: which events a claim would play.
+   * Pure helper for tests: which events a claim would play (seq-aware).
    * @param {object[]} events
-   * @param {number} cursor
+   * @param {number} lastPlayedSeqOrCursor
    */
-  static claimEventSlice(events, cursor) {
-    const list = events || [];
-    const from = Math.min(Math.max(0, cursor), list.length);
-    const to = list.length;
-    return { from, to, fresh: list.slice(from, to), nextCursor: to };
+  static claimEventSlice(events, lastPlayedSeqOrCursor = 0) {
+    const claim = claimEventsAfterSeq(events, lastPlayedSeqOrCursor);
+    return {
+      from: lastPlayedSeqOrCursor,
+      to: claim.nextSeq,
+      fresh: claim.fresh,
+      nextCursor: claim.nextSeq,
+      nextSeq: claim.nextSeq,
+      mode: claim.mode,
+    };
   }
 
   /**
@@ -331,6 +344,11 @@ export class BattlePresentation {
     // still advances cursor without playing (tests that assert deprecation path).
     const list = state.events || [];
     this._eventCursor = list.length;
+    let maxSeq = this._lastPlayedSeq || 0;
+    for (const e of list) {
+      if (e.seq != null && e.seq > maxSeq) maxSeq = e.seq;
+    }
+    this._lastPlayedSeq = maxSeq;
   }
 
   async walkPath(unitId, path, map, msPerStep = WALK_MS_PER_STEP) {
