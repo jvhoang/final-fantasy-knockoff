@@ -375,6 +375,7 @@ export class GameApp {
       jobId: preview.jobId,
       weaponId: preview.weapon?.id || 'sword',
       armorId: preview.armor?.id || 'leather',
+      accessoryId: preview.accessory?.id || preview.accessoryId || 'none',
       gender: preview.visual.gender || 'm',
       team: 'player',
     };
@@ -728,6 +729,9 @@ export class GameApp {
     if (!canControl) {
       actEl.innerHTML = '';
       waitFace?.classList.add('hidden');
+      // Never leave a stuck Confirm FAB when we cannot act
+      if (this._pendingActTarget || this.selectedAbility) this._clearActPreview();
+      else this._renderConfirmActButton();
       this._syncActionChromeVisibility();
       return;
     }
@@ -742,6 +746,7 @@ export class GameApp {
         <div id="ability-list" class="ability-list"></div>
       `;
       this._renderWaitFaceUi();
+      this._renderConfirmActButton();
       this._syncActionChromeVisibility();
       return;
     }
@@ -769,6 +774,8 @@ export class GameApp {
         this._showAbilityRange(active, this.selectedAbility);
       }
     }
+    // Sync FAB after list rebuild (shows only when pending target + ability)
+    this._renderConfirmActButton();
     this._syncActionChromeVisibility();
   }
 
@@ -840,12 +847,22 @@ export class GameApp {
     return false;
   }
 
+  /**
+   * Leave act-target preview: hide Confirm FAB and drop pending tile.
+   * Called whenever Move / Ability re-pick / Wait / idle cancel leaves act preview.
+   */
+  _clearActPreview({ keepAbility = false } = {}) {
+    this._pendingActTarget = null;
+    this._hoverAoeTile = null;
+    if (!keepAbility) this.selectedAbility = null;
+    this._renderConfirmActButton();
+  }
+
   enterMoveMode() {
     const active = getUnit(this.match, this.match.activeUnitId);
     if (!active || this.match.turn.moved) return;
+    this._clearActPreview();
     this.uiMode = 'move';
-    this.selectedAbility = null;
-    this._hoverAoeTile = null;
     audio.sfx('select');
     const range = getMoveRange(this.match, active);
     const tiles = [...range.values()].map((n) => ({ x: n.x, y: n.y }));
@@ -858,9 +875,8 @@ export class GameApp {
   enterActMode() {
     const active = getUnit(this.match, this.match.activeUnitId);
     if (!active || this.match.turn.acted) return;
+    this._clearActPreview();
     this.uiMode = 'pick-ability';
-    this.selectedAbility = null;
-    this._hoverAoeTile = null;
     audio.sfx('select');
     this._renderCommandBar();
     this._populateAbilityList(active);
@@ -880,7 +896,8 @@ export class GameApp {
       btn.onclick = () => {
         this.selectedAbility = btn.dataset.id;
         this.uiMode = 'act';
-        this._pendingActTarget = null;
+        this._clearActPreview({ keepAbility: true });
+        this.selectedAbility = btn.dataset.id;
         audio.sfx('ui');
         this._showAbilityRange(active, this.selectedAbility);
         this._renderMathCtPicker(this.selectedAbility);
@@ -924,11 +941,9 @@ export class GameApp {
          <em class="hint">Use lower-left Confirm</em>`
       : `<em class="hint">Click a cell to preview, then Confirm (bottom-left)</em>`;
     row.querySelector('#btn-cancel-act')?.addEventListener('click', () => {
-      this._pendingActTarget = null;
-      this.selectedAbility = null;
+      this._clearActPreview();
       this.uiMode = 'idle';
       this.arena.clearRanges();
-      this._renderConfirmActButton();
       this._renderCommandBar();
     });
   }
@@ -944,9 +959,7 @@ export class GameApp {
     };
     if (isMathAbility(this.selectedAbility)) action.ctNumber = this._mathCtNumber;
     await this.submitAction(action);
-    this.selectedAbility = null;
-    this._pendingActTarget = null;
-    this._hoverAoeTile = null;
+    this._clearActPreview();
     this.arena.clearRanges();
     if (this.uiMode !== 'wait-face') {
       this.uiMode = 'idle';
@@ -1028,8 +1041,11 @@ export class GameApp {
   enterWaitFace() {
     const active = getUnit(this.match, this.match.activeUnitId);
     if (!active) return;
+    this._clearActPreview();
     this.uiMode = 'wait-face';
     this._waitFacing = active.facing || 'N';
+    this.arena.clearRanges();
+    this._renderCommandBar();
     this._renderWaitFaceUi();
   }
 

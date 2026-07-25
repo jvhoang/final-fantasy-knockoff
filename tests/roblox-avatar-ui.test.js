@@ -134,6 +134,49 @@ describe('confirm FAB + panel highlight structure', () => {
     assert.ok(fs.readFileSync(path.join(root, 'public/styles.css'), 'utf8').includes('materia-lifestream-bg'));
   });
 
+  it('leaving act preview clears pending target + FAB (Move/Wait/Ability)', () => {
+    const app = fs.readFileSync(path.join(root, 'src/client/game-app.js'), 'utf8');
+    assert.ok(app.includes('_clearActPreview'));
+    // Mode entries must clear act preview so FAB cannot stick
+    assert.match(app, /enterMoveMode\s*\([^)]*\)\s*\{[\s\S]*?_clearActPreview/);
+    assert.match(app, /enterActMode\s*\([^)]*\)\s*\{[\s\S]*?_clearActPreview/);
+    assert.match(app, /enterWaitFace\s*\([^)]*\)\s*\{[\s\S]*?_clearActPreview/);
+    // Formation preview must pass accessory for Roblox gear visibility
+    assert.ok(app.includes('accessoryId: preview.accessory'));
+  });
+
+  it('accessoryId changes avatar fingerprint and mesh', () => {
+    const a = avatarFingerprint({
+      jobId: 'squireling',
+      weaponId: 'sword',
+      armorId: 'leather',
+      accessoryId: 'none',
+    });
+    const b = avatarFingerprint({
+      jobId: 'squireling',
+      weaponId: 'sword',
+      armorId: 'leather',
+      accessoryId: 'power_glove',
+    });
+    assert.notEqual(a, b);
+    const m1 = buildUnitMesh(
+      { id: 'a', jobId: 'squireling', weaponId: 'sword', armorId: 'leather', accessoryId: 'none', gender: 'm' },
+      'player'
+    );
+    const m2 = buildUnitMesh(
+      {
+        id: 'a',
+        jobId: 'squireling',
+        weaponId: 'sword',
+        armorId: 'leather',
+        accessoryId: 'power_glove',
+        gender: 'm',
+      },
+      'player'
+    );
+    assert.notEqual(m1.userData.fingerprint, m2.userData.fingerprint);
+  });
+
   it('arena exposes face zoom and inspect highlight mode', () => {
     const arena = fs.readFileSync(path.join(root, 'src/client/arena.js'), 'utf8');
     assert.ok(arena.includes('ZOOM_FACE'));
