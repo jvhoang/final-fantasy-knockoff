@@ -305,6 +305,105 @@ body {
   display: none;
 }
 
+.battle-banner.intro {
+  font-size: 2.8rem;
+  color: #ffe066;
+  animation: introPulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes introPulse {
+  from { opacity: 0.85; letter-spacing: 0.1em; }
+  to { opacity: 1; letter-spacing: 0.16em; }
+}
+
+.cast-name-banner {
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  transform: translateX(-50%);
+  font-size: 1.45rem;
+  font-weight: 800;
+  color: #c4f1ff;
+  text-shadow: 0 0 12px #0a3a50, 0 2px 0 #000;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 9;
+  transition: opacity 0.2s;
+  letter-spacing: 0.08em;
+}
+
+.cast-name-banner.show {
+  opacity: 1;
+}
+
+.cmd-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.cmd-row.muted {
+  opacity: 0.55;
+}
+
+.ability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 12rem;
+  overflow: auto;
+}
+
+.math-ct-picker {
+  margin-top: 0.4rem;
+  padding: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.math-ct-picker.hidden {
+  display: none;
+}
+
+.math-ct-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+.math-ct-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.stat-delta {
+  font-size: 0.85em;
+  font-weight: 800;
+  margin-left: 0.25rem;
+  animation: deltaPop 0.35s ease-out;
+}
+
+.stat-delta.up {
+  color: #4ade80;
+}
+
+.stat-delta.down {
+  color: #f87171;
+}
+
+@keyframes deltaPop {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.badge.active-turn {
+  background: #ca8a04;
+  color: #111;
+}
+
 .inspect-panel {
   font-size: 0.8rem;
 }

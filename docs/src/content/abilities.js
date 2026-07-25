@@ -425,17 +425,20 @@ export const ABILITIES = {
   math_fire: {
     id: 'math_fire', name: 'Arithm: Fire', kind: 'magical', power: 5, mpCost: 0,
     minRange: 1, maxRange: 5, aoe: 'diamond', aoeSize: 1, castTime: 3, effect: 'damage',
-    element: 'fire', presentation: 'cast', description: 'CT-charged math Fire.',
+    element: 'fire', presentation: 'cast',
+    description: 'CT-charged math Fire. Pick CT number 2–6 (Calculator).',
   },
   math_cure: {
     id: 'math_cure', name: 'Arithm: Cure', kind: 'magical', power: 6, mpCost: 0,
     minRange: 0, maxRange: 5, aoe: 'diamond', aoeSize: 1, castTime: 3, effect: 'heal',
-    presentation: 'cast', description: 'CT-charged math Cure.',
+    presentation: 'cast',
+    description: 'CT-charged math Cure. Pick CT number 2–6 (Calculator).',
   },
   math_bolt: {
     id: 'math_bolt', name: 'Arithm: Bolt', kind: 'magical', power: 5, mpCost: 0,
     minRange: 1, maxRange: 5, aoe: 'single', aoeSize: 0, castTime: 3, effect: 'damage',
-    element: 'lightning', presentation: 'cast', description: 'CT-charged math Bolt.',
+    element: 'lightning', presentation: 'cast',
+    description: 'CT-charged math Bolt. Pick CT number 2–6 (Calculator).',
   },
   sinkhole: {
     id: 'sinkhole', name: 'Sinkhole', kind: 'magical', power: 4, mpCost: 10,

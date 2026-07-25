@@ -1,19 +1,21 @@
-# STATUS — Slow presentation + maps + bottom panel + materia theme
+# STATUS — Battle polish goal (2026-07-25)
 
-## Done
-- **Slow sequential battle:** 650ms/walk step, 450ms event gaps, long cast/attack holds (exported in `presentation-timing.js`)
-- **AI + player:** `playEventsSinceCursor` one event at a time (no batch teleport)
-- **Bottom unit panel** under arena with portrait + full stats; actions on right rail
-- **24 random FFT-inspired maps** (`maps-pool.js`)
-- **Ash KO** dissolve particles
-- **Sticky loadout top** (3D preview + attributes); gear scrolls below
-- **Distinct item icons** (blood vs diamond swords, etc.)
-- **Materia/lifestream theme** background + teal/violet UI chrome
+## Complete
+- Looping melodic BGM via pure `planBgmRearm` (always ≥1 phrase ahead; 2.5s tick) — no pad-only silence; `simulateBgmLoop` asserts maxGap=0 over 60s/180s
+- Distinct SFX: move / melee / bow / magic / summon / hit / ui
+- Active unit + tile highlight; zoom min `2.5` (was 5)
+- ~4.2s “Battle begins” intro (wide → orbit → focus first actor)
+- Per-turn camera focus (center + front-facing)
+- Command bar Move/Ability/Wait always visible; ability submenu + Calculator CT 2–6
+- Range + AoE preview before confirm (hover tiles)
+- MP cost floaters suppressed; cast_resolve shows ability name
+- Longer holds; melee swing + hurt; bow projectile; MP-scaled magic spectacle
+- Formation: equip-colored weapon mesh (Blood Sword); green/red stat deltas
+- Tests: 87 pass; Playwright ×2 “Battle begins” + canvas; `docs/` rebuilt
 
-## Tests
-**68/68 pass**
+## Evidence
+- Scratch: `npm-test.log`, `playwright-battle.log`, `battle-intro.png`
+- Unit: `tests/battle-polish.test.js`
 
-## Run
-```bash
-cd final-fantasy-knockoff && npm install && npm start
-```
+## Next
+- Optional: push `docs/` to GitHub Pages for live deploy

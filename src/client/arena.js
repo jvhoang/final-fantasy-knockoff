@@ -25,6 +25,12 @@ export function markClickSuppressed(state) {
   state._clickSuppressed = true;
 }
 
+/** Prior zoom min was 5; closer zoom allowed for turn focus */
+export const ZOOM_MIN = 2.5;
+export const ZOOM_MAX = 36;
+export const ZOOM_DEFAULT = 14;
+export const ZOOM_INTRO_WIDE = 26;
+
 const TERRAIN = {
   floor: { color: 0x5a7a4a, roughness: 0.92, metal: 0.05 },
   elevated: { color: 0x6d8f62, roughness: 0.88, metal: 0.08 },
@@ -49,12 +55,16 @@ export class ArenaRenderer {
     this.scene.background = new THREE.Color(0x6a8aaa);
     this.scene.fog = new THREE.FogExp2(0x8aa8c0, 0.018);
 
-    this.zoom = 14;
+    this.zoom = ZOOM_DEFAULT;
     this.rotY = Math.PI / 4;
     this.rotX = Math.PI / 5.2;
     this.lookAt = new THREE.Vector3(8, 0.5, 8);
     this._minPolar = 0.25;
     this._maxPolar = Math.PI / 2.15;
+    this._cameraTween = null;
+    this._activeHighlight = null;
+    this._activeTileMesh = null;
+    this._castBannerEl = null;
 
     const aspect = this.width / this.height;
     this.camera = new THREE.OrthographicCamera(
@@ -285,8 +295,175 @@ export class ArenaRenderer {
   }
 
   zoomBy(delta) {
-    this.zoom = Math.max(5, Math.min(32, this.zoom + delta));
+    this.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, this.zoom + delta));
     this._updateCamera();
+  }
+
+  /**
+   * Smoothly animate camera lookAt / angles / zoom.
+   * @param {{ lookAt?: {x:number,y:number,z:number}, rotY?: number, rotX?: number, zoom?: number }} target
+   * @param {number} [ms=900]
+   */
+  animateCameraTo(target, ms = 900) {
+    const from = {
+      lookAt: this.lookAt.clone(),
+      rotY: this.rotY,
+      rotX: this.rotX,
+      zoom: this.zoom,
+    };
+    const to = {
+      lookAt: target.lookAt
+        ? new THREE.Vector3(target.lookAt.x, target.lookAt.y ?? 0.5, target.lookAt.z)
+        : from.lookAt.clone(),
+      rotY: target.rotY ?? from.rotY,
+      rotX: target.rotX ?? from.rotX,
+      zoom: target.zoom ?? from.zoom,
+    };
+    // Shortest angle delta for rotY
+    let dY = to.rotY - from.rotY;
+    while (dY > Math.PI) dY -= Math.PI * 2;
+    while (dY < -Math.PI) dY += Math.PI * 2;
+    const t0 = performance.now();
+    this._cameraTween = { from, to, dY, t0, ms };
+    return new Promise((resolve) => {
+      const step = () => {
+        if (!this._cameraTween || this._cameraTween.t0 !== t0) {
+          resolve();
+          return;
+        }
+        const u = Math.min(1, (performance.now() - t0) / ms);
+        const s = u * u * (3 - 2 * u);
+        this.lookAt.lerpVectors(from.lookAt, to.lookAt, s);
+        this.rotY = from.rotY + dY * s;
+        this.rotX = from.rotX + (to.rotX - from.rotX) * s;
+        this.zoom = from.zoom + (to.zoom - from.zoom) * s;
+        this._updateCamera();
+        if (u < 1) requestAnimationFrame(step);
+        else {
+          this._cameraTween = null;
+          resolve();
+        }
+      };
+      requestAnimationFrame(step);
+    });
+  }
+
+  /**
+   * Center camera on unit, front-facing (camera looks at unit from their facing direction).
+   * @param {string} unitId
+   * @param {{ facing?: string, zoom?: number, ms?: number }} [opts]
+   */
+  focusOnUnit(unitId, opts = {}) {
+    const mesh = this.unitMeshes.get(unitId);
+    if (!mesh) return Promise.resolve();
+    const facing = opts.facing || mesh.userData?.facing || 'S';
+    // Place camera opposite to facing so unit appears front-facing in view
+    const faceYaw = { N: Math.PI, S: 0, E: Math.PI / 2, W: -Math.PI / 2 };
+    const unitYaw = faceYaw[facing] ?? 0;
+    // Camera azimuth so we look toward the unit's face
+    const rotY = unitYaw + Math.PI; // look from in front
+    const zoom = opts.zoom ?? 6.5;
+    return this.animateCameraTo(
+      {
+        lookAt: { x: mesh.position.x, y: (mesh.userData.baseY || mesh.position.y) + 0.4, z: mesh.position.z },
+        rotY,
+        rotX: Math.PI / 5.5,
+        zoom,
+      },
+      opts.ms ?? 850
+    );
+  }
+
+  /**
+   * Wide arena shot → zoom/autorotate onto first actor (~battle intro).
+   * @param {{ width: number, height: number }} map
+   * @param {string} firstUnitId
+   * @param {string} [facing]
+   * @param {number} [ms]
+   */
+  async playBattleIntro(map, firstUnitId, facing = 'S', ms = 4200) {
+    const cx = (map.width - 1) / 2;
+    const cz = (map.height - 1) / 2;
+    this.lookAt.set(cx, 0.5, cz);
+    this.rotY = Math.PI / 4;
+    this.rotX = Math.PI / 4.2;
+    this.zoom = ZOOM_INTRO_WIDE;
+    this._updateCamera();
+    // Slow orbit while still wide
+    const orbitMs = Math.floor(ms * 0.45);
+    const t0 = performance.now();
+    await new Promise((resolve) => {
+      const spin = () => {
+        const u = Math.min(1, (performance.now() - t0) / orbitMs);
+        this.rotY = Math.PI / 4 + u * 0.55;
+        this._updateCamera();
+        if (u < 1) requestAnimationFrame(spin);
+        else resolve();
+      };
+      requestAnimationFrame(spin);
+    });
+    await this.focusOnUnit(firstUnitId, { facing, zoom: 7, ms: Math.floor(ms * 0.5) });
+  }
+
+  /**
+   * Highlight active unit mesh + tile underfoot.
+   * @param {string|null} unitId
+   * @param {import('../core/grid.js').GridMap} [map]
+   * @param {{x:number,y:number}|null} [tile]
+   */
+  setActiveHighlight(unitId, map = null, tile = null) {
+    // Clear previous
+    if (this._activeHighlight) {
+      this.scene.remove(this._activeHighlight);
+      this._activeHighlight = null;
+    }
+    if (this._activeTileMesh) {
+      this.scene.remove(this._activeTileMesh);
+      this._activeTileMesh = null;
+    }
+    // Restore ring opacity on units
+    for (const [, mesh] of this.unitMeshes) {
+      if (mesh.userData?._teamRing) {
+        mesh.userData._teamRing.material.opacity = 0.55;
+        mesh.userData._teamRing.scale.setScalar(1);
+      }
+    }
+    if (!unitId) return;
+    const mesh = this.unitMeshes.get(unitId);
+    if (!mesh) return;
+
+    // Pulsing gold ring around unit
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.38, 0.045, 8, 28),
+      new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.95 })
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.copy(mesh.position);
+    ring.position.y = (mesh.userData.baseY || mesh.position.y) + 0.06;
+    this.scene.add(ring);
+    this._activeHighlight = ring;
+    mesh.userData._activeRing = ring;
+
+    // Bright tile under unit
+    const tx = tile?.x ?? Math.round(mesh.position.x);
+    const ty = tile?.y ?? Math.round(mesh.position.z);
+    let h = 0.28;
+    if (map?.tiles?.[ty]?.[tx]) {
+      const t = map.tiles[ty][tx];
+      h = t.terrain === 'water' ? 0.18 : t.terrain === 'bridge' ? 0.42 : t.height * 0.48 + 0.28;
+    }
+    const tileMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.98, 0.08, 0.98),
+      new THREE.MeshBasicMaterial({
+        color: 0xffcc33,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+      })
+    );
+    tileMesh.position.set(tx, h, ty);
+    this.scene.add(tileMesh);
+    this._activeTileMesh = tileMesh;
   }
 
   getCameraState() {
@@ -585,22 +762,34 @@ export class ArenaRenderer {
     return { x: x - rect.left, y: y - rect.top, world: mesh.position };
   }
 
-  spawnSpellBurst(unitId, abilityId = '') {
+  _spellColor(abilityId = '') {
+    const id = String(abilityId);
+    if (id.includes('fire') || id.includes('ifrit') || id.includes('firaga') || id.includes('magma')) return 0xff4400;
+    if (id.includes('ice') || id.includes('shiva')) return 0x88ddff;
+    if (id.includes('bolt') || id.includes('thund')) return 0xffee44;
+    if (id.includes('cure') || id.includes('moogle') || id.includes('holy')) return 0xeeffaa;
+    return 0x66ccff;
+  }
+
+  /**
+   * @param {string} unitId
+   * @param {string} [abilityId]
+   * @param {{ intensity?: number, arenaWide?: boolean, rings?: number }|null} [spectacle]
+   */
+  spawnSpellBurst(unitId, abilityId = '', spectacle = null) {
     const mesh = this.unitMeshes.get(unitId);
     if (!mesh) return;
-    const id = String(abilityId);
-    let color = 0x66ccff;
-    if (id.includes('fire') || id.includes('ifrit') || id.includes('firaga') || id.includes('magma')) color = 0xff4400;
-    if (id.includes('ice') || id.includes('shiva')) color = 0x88ddff;
-    if (id.includes('bolt') || id.includes('thund')) color = 0xffee44;
-    if (id.includes('cure') || id.includes('moogle') || id.includes('holy')) color = 0xeeffaa;
-    if (id.includes('summon')) {
-      // multi-ring spectacle
-      for (let i = 0; i < 3; i++) {
+    const color = this._spellColor(abilityId);
+    const intensity = spectacle?.intensity ?? 1;
+    const rings = spectacle?.rings ?? (String(abilityId).includes('summon') ? 4 : 2);
+    const arenaWide = spectacle?.arenaWide || String(abilityId).includes('summon');
+
+    if (arenaWide || String(abilityId).includes('summon') || rings >= 4) {
+      for (let i = 0; i < rings; i++) {
         setTimeout(() => {
           const ring = new THREE.Mesh(
-            new THREE.TorusGeometry(0.3 + i * 0.25, 0.04, 8, 24),
-            new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85 })
+            new THREE.TorusGeometry(0.35 + i * 0.28 * intensity, 0.05, 8, 28),
+            new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 })
           );
           ring.position.copy(mesh.position);
           ring.position.y += 0.4;
@@ -608,33 +797,56 @@ export class ArenaRenderer {
           this.fxGroup.add(ring);
           const t0 = performance.now();
           const anim = () => {
-            const u = (performance.now() - t0) / 900;
+            const u = (performance.now() - t0) / (1000 + intensity * 200);
             if (u >= 1) {
               this.fxGroup.remove(ring);
               return;
             }
-            ring.scale.setScalar(1 + u * 2);
-            ring.material.opacity = 0.85 * (1 - u);
-            ring.position.y = mesh.position.y + 0.4 + u * 1.2;
+            ring.scale.setScalar(1 + u * (2.5 + intensity));
+            ring.material.opacity = 0.9 * (1 - u);
+            ring.position.y = mesh.position.y + 0.4 + u * 1.5 * intensity;
             requestAnimationFrame(anim);
           };
           anim();
-        }, i * 120);
+        }, i * 100);
       }
-      // pillars
+      const pillarH = 2.2 + intensity * 1.2;
       const pillar = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.15, 0.35, 2.5, 10),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45 })
+        new THREE.CylinderGeometry(0.12 * intensity, 0.4 * intensity, pillarH, 12),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5 })
       );
       pillar.position.copy(mesh.position);
-      pillar.position.y += 1.2;
+      pillar.position.y += pillarH * 0.45;
       this.fxGroup.add(pillar);
-      setTimeout(() => this.fxGroup.remove(pillar), 700);
+      setTimeout(() => this.fxGroup.remove(pillar), 900 + intensity * 200);
+      if (arenaWide) {
+        // Arena-wide ground wave
+        const wave = new THREE.Mesh(
+          new THREE.RingGeometry(0.5, 1.2, 32),
+          new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55, side: THREE.DoubleSide })
+        );
+        wave.rotation.x = -Math.PI / 2;
+        wave.position.copy(mesh.position);
+        wave.position.y += 0.12;
+        this.fxGroup.add(wave);
+        const t0 = performance.now();
+        const anim = () => {
+          const u = (performance.now() - t0) / 1400;
+          if (u >= 1) {
+            this.fxGroup.remove(wave);
+            return;
+          }
+          wave.scale.setScalar(1 + u * 14);
+          wave.material.opacity = 0.55 * (1 - u);
+          requestAnimationFrame(anim);
+        };
+        anim();
+      }
       return;
     }
-    // fireball / spell orb
+    // Standard spell orb
     const orb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.2, 12, 12),
+      new THREE.SphereGeometry(0.18 + 0.06 * intensity, 12, 12),
       new THREE.MeshBasicMaterial({ color })
     );
     orb.position.copy(mesh.position);
@@ -642,26 +854,160 @@ export class ArenaRenderer {
     this.fxGroup.add(orb);
     const t0 = performance.now();
     const anim = () => {
-      const u = (performance.now() - t0) / 500;
+      const u = (performance.now() - t0) / (550 + intensity * 120);
       if (u >= 1) {
         this.fxGroup.remove(orb);
-        // ground flash
         const flash = new THREE.Mesh(
-          new THREE.CircleGeometry(0.8, 16),
-          new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, side: THREE.DoubleSide })
+          new THREE.CircleGeometry(0.7 + intensity * 0.35, 16),
+          new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.65, side: THREE.DoubleSide })
         );
         flash.rotation.x = -Math.PI / 2;
         flash.position.copy(mesh.position);
         flash.position.y += 0.15;
         this.fxGroup.add(flash);
-        setTimeout(() => this.fxGroup.remove(flash), 300);
+        setTimeout(() => this.fxGroup.remove(flash), 350 + intensity * 80);
         return;
       }
-      orb.position.y = mesh.position.y + 1.0 + Math.sin(u * Math.PI) * 0.5;
-      orb.scale.setScalar(1 + u);
+      orb.position.y = mesh.position.y + 1.0 + Math.sin(u * Math.PI) * 0.55 * intensity;
+      orb.scale.setScalar(1 + u * intensity);
       requestAnimationFrame(anim);
     };
     anim();
+  }
+
+  /**
+   * Grander magic / summon FX scaled by spectacle (MP cost).
+   * @param {string} casterId
+   * @param {string} abilityId
+   * @param {{ intensity: number, arenaWide: boolean, rings: number }} spectacle
+   * @param {import('../core/grid.js').GridMap} map
+   * @param {{x:number,y:number}|null} [target]
+   */
+  spawnMagicSpectacle(casterId, abilityId, spectacle, map, target = null) {
+    if (!spectacle) return;
+    const mesh = this.unitMeshes.get(casterId);
+    if (mesh) this.spawnSpellBurst(casterId, abilityId, spectacle);
+    if (target) this.spawnSpellBurstAtTile(target.x, target.y, abilityId, map, spectacle);
+    if (spectacle.arenaWide && map) {
+      // Sky beam over map center
+      const cx = (map.width - 1) / 2;
+      const cz = (map.height - 1) / 2;
+      const color = this._spellColor(abilityId);
+      const beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.35, 1.2, 8, 12),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35 })
+      );
+      beam.position.set(cx, 4, cz);
+      this.fxGroup.add(beam);
+      const t0 = performance.now();
+      const anim = () => {
+        const u = (performance.now() - t0) / 1600;
+        if (u >= 1) {
+          this.fxGroup.remove(beam);
+          return;
+        }
+        beam.material.opacity = 0.4 * (1 - u);
+        beam.scale.y = 1 + u * 0.4;
+        requestAnimationFrame(anim);
+      };
+      anim();
+    }
+  }
+
+  /**
+   * Bow & arrow projectile along arc from unit to tile.
+   * @param {string} unitId
+   * @param {{x:number,y:number}} target
+   * @param {import('../core/grid.js').GridMap} map
+   * @param {number} [ms=1200]
+   */
+  spawnArrowProjectile(unitId, target, map, ms = 1200) {
+    const mesh = this.unitMeshes.get(unitId);
+    if (!mesh || !target) return Promise.resolve();
+    let h1 = 0.5;
+    if (map?.tiles?.[target.y]?.[target.x]) {
+      const t = map.tiles[target.y][target.x];
+      h1 = t.terrain === 'water' ? 0.2 : t.terrain === 'bridge' ? 0.45 : t.height * 0.48 + 0.35;
+    }
+    const start = mesh.position.clone();
+    start.y += 0.7;
+    const end = new THREE.Vector3(target.x, h1 + 0.4, target.y);
+    const arrow = new THREE.Mesh(
+      new THREE.ConeGeometry(0.06, 0.28, 6),
+      new THREE.MeshBasicMaterial({ color: 0xe8d5a3 })
+    );
+    arrow.position.copy(start);
+    this.fxGroup.add(arrow);
+    // Trail dots
+    const trails = [];
+    for (let i = 0; i < 5; i++) {
+      const d = new THREE.Mesh(
+        new THREE.SphereGeometry(0.03, 4, 4),
+        new THREE.MeshBasicMaterial({ color: 0xfff3c4, transparent: true, opacity: 0.7 })
+      );
+      this.fxGroup.add(d);
+      trails.push(d);
+    }
+    const t0 = performance.now();
+    return new Promise((resolve) => {
+      const step = () => {
+        const u = Math.min(1, (performance.now() - t0) / ms);
+        const s = u;
+        const x = start.x + (end.x - start.x) * s;
+        const z = start.z + (end.z - start.z) * s;
+        const y = start.y + (end.y - start.y) * s + Math.sin(s * Math.PI) * 1.1;
+        arrow.position.set(x, y, z);
+        // Point along velocity approx
+        const nx = end.x - start.x;
+        const nz = end.z - start.z;
+        arrow.rotation.y = Math.atan2(nx, nz);
+        arrow.rotation.x = -Math.PI / 2 + Math.cos(s * Math.PI) * 0.5;
+        for (let i = 0; i < trails.length; i++) {
+          const tu = Math.max(0, s - (i + 1) * 0.06);
+          trails[i].position.set(
+            start.x + (end.x - start.x) * tu,
+            start.y + (end.y - start.y) * tu + Math.sin(tu * Math.PI) * 1.1,
+            start.z + (end.z - start.z) * tu
+          );
+          trails[i].material.opacity = 0.7 * (1 - i / trails.length) * (1 - s);
+        }
+        if (u < 1) requestAnimationFrame(step);
+        else {
+          this.fxGroup.remove(arrow);
+          for (const d of trails) this.fxGroup.remove(d);
+          // Impact spark
+          const spark = new THREE.Mesh(
+            new THREE.SphereGeometry(0.12, 8, 8),
+            new THREE.MeshBasicMaterial({ color: 0xffee88 })
+          );
+          spark.position.copy(end);
+          this.fxGroup.add(spark);
+          setTimeout(() => this.fxGroup.remove(spark), 220);
+          resolve();
+        }
+      };
+      requestAnimationFrame(step);
+    });
+  }
+
+  /**
+   * Optional DOM banner for cast name (parent may provide float layer via container).
+   * @param {string} name
+   * @param {number} [ms=2000]
+   */
+  showCastBanner(name, ms = 2000) {
+    const host = this.container?.parentElement;
+    if (!host || !name) return;
+    let el = host.querySelector('.cast-name-banner');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'cast-name-banner';
+      host.appendChild(el);
+    }
+    el.textContent = name;
+    el.classList.add('show');
+    clearTimeout(this._castBannerT);
+    this._castBannerT = setTimeout(() => el.classList.remove('show'), ms);
   }
 
   playKo(unitId) {
@@ -744,7 +1090,7 @@ export class ArenaRenderer {
    * @param {string} abilityId
    * @param {import('../core/grid.js').GridMap} map
    */
-  spawnSpellBurstAtTile(x, y, abilityId = '', map = null) {
+  spawnSpellBurstAtTile(x, y, abilityId = '', map = null, spectacle = null) {
     let h = 0.3;
     if (map?.tiles?.[y]?.[x]) {
       const t = map.tiles[y][x];
@@ -759,11 +1105,11 @@ export class ArenaRenderer {
       this.unitMeshes.set(anchorId, anchor);
     }
     anchor.position.set(x, h, y);
-    this.spawnSpellBurst(anchorId, abilityId);
+    this.spawnSpellBurst(anchorId, abilityId, spectacle);
     setTimeout(() => {
       this.scene.remove(anchor);
       this.unitMeshes.delete(anchorId);
-    }, 1200);
+    }, 1600);
   }
 
   spawnCastFx(unitId, big = false) {
@@ -798,14 +1144,28 @@ export class ArenaRenderer {
   spawnHitFx(unitId) {
     const mesh = this.unitMeshes.get(unitId);
     if (!mesh) return;
-    const spark = new THREE.Mesh(
-      new THREE.SphereGeometry(0.08, 6, 6),
-      new THREE.MeshBasicMaterial({ color: 0xffee88 })
+    // Multi-spark hurt flash
+    for (let i = 0; i < 5; i++) {
+      const spark = new THREE.Mesh(
+        new THREE.SphereGeometry(0.06 + Math.random() * 0.05, 6, 6),
+        new THREE.MeshBasicMaterial({ color: i % 2 ? 0xff6644 : 0xffee88 })
+      );
+      spark.position.copy(mesh.position);
+      spark.position.y += 0.55 + Math.random() * 0.25;
+      spark.position.x += (Math.random() - 0.5) * 0.35;
+      spark.position.z += (Math.random() - 0.5) * 0.35;
+      this.fxGroup.add(spark);
+      setTimeout(() => this.fxGroup.remove(spark), 280 + i * 40);
+    }
+    // Brief red tint flash
+    const flash = new THREE.Mesh(
+      new THREE.SphereGeometry(0.35, 10, 10),
+      new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.35 })
     );
-    spark.position.copy(mesh.position);
-    spark.position.y += 0.6;
-    this.fxGroup.add(spark);
-    setTimeout(() => this.fxGroup.remove(spark), 200);
+    flash.position.copy(mesh.position);
+    flash.position.y += 0.5;
+    this.fxGroup.add(flash);
+    setTimeout(() => this.fxGroup.remove(flash), 220);
   }
 
   clearRanges() {
@@ -817,8 +1177,9 @@ export class ArenaRenderer {
    * @param {{x:number,y:number}[]} tiles
    * @param {number} color
    * @param {import('../core/grid.js').GridMap} map
+   * @param {number} [opacity=0.48]
    */
-  showRange(tiles, color, map) {
+  showRange(tiles, color, map, opacity = 0.48) {
     for (const t of tiles) {
       const tile = map.tiles[t.y]?.[t.x];
       let h = tile ? tile.height * 0.48 + 0.24 : 0.24;
@@ -829,7 +1190,7 @@ export class ArenaRenderer {
         new THREE.MeshBasicMaterial({
           color,
           transparent: true,
-          opacity: 0.48,
+          opacity,
           depthWrite: false,
         })
       );
@@ -837,6 +1198,20 @@ export class ArenaRenderer {
       this.scene.add(mesh);
       this.rangeMeshes.push(mesh);
     }
+  }
+
+  /**
+   * Range cells + AoE effect cells (distinct colors) before confirm.
+   * @param {{x:number,y:number}[]} rangeTiles
+   * @param {{x:number,y:number}[]} aoeTiles
+   * @param {import('../core/grid.js').GridMap} map
+   */
+  showRangeAndAoe(rangeTiles, aoeTiles, map) {
+    this.clearRanges();
+    const aoeSet = new Set((aoeTiles || []).map((t) => `${t.x},${t.y}`));
+    const rangeOnly = (rangeTiles || []).filter((t) => !aoeSet.has(`${t.x},${t.y}`));
+    this.showRange(rangeOnly, 0xef4444, map, 0.4);
+    this.showRange(aoeTiles || [], 0xfbbf24, map, 0.62);
   }
 
   /**
@@ -851,6 +1226,11 @@ export class ArenaRenderer {
     // pointerup clears _drag before click — use durable suppression flag
     if (this.consumeClickSuppression()) return null;
     if (this._drag?.moved) return null;
+    return this.hoverTile(event);
+  }
+
+  /** Raycast tile under pointer without consuming click suppression (hover preview). */
+  hoverTile(event) {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -890,6 +1270,15 @@ export class ArenaRenderer {
         if (mesh.userData?.tile?.terrain === 'water' && mesh.material?.opacity != null) {
           mesh.material.opacity = 0.75 + Math.sin(now * 0.003 + mesh.position.x) * 0.06;
         }
+      }
+      // Pulse active unit highlight
+      if (this._activeHighlight) {
+        const s = 1 + Math.sin(now * 0.008) * 0.12;
+        this._activeHighlight.scale.set(s, s, s);
+        this._activeHighlight.material.opacity = 0.75 + Math.sin(now * 0.01) * 0.2;
+      }
+      if (this._activeTileMesh) {
+        this._activeTileMesh.material.opacity = 0.4 + Math.sin(now * 0.009) * 0.15;
       }
       this.renderer.render(this.scene, this.camera);
     };

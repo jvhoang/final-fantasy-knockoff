@@ -28,6 +28,7 @@ import {
   isAsleep,
 } from './combat.js';
 import { getAbility } from '../content/abilities.js';
+import { resolveAbilityCastTime } from '../content/calculator.js';
 import { getWeapon } from '../content/items.js';
 import { buildParty, defaultPlayerLoadouts, defaultEnemyLoadouts } from './loadout.js';
 import { createRandomMap, createMapById } from '../content/map-castle.js';
@@ -315,10 +316,12 @@ export function applyAction(state, action) {
     }
     unit.facing = facingToward(unit, action.target);
 
-    if (ability.castTime > 0) {
-      beginCharge(unit, action.abilityId, action.target, ability.castTime);
+    // Calculator: allow CT number override (2–6) instead of only ability default 3
+    const castTime = resolveAbilityCastTime(ability, action.ctNumber);
+    if (castTime > 0) {
+      beginCharge(unit, action.abilityId, action.target, castTime);
       state.turn.acted = true;
-      state.log.push(`${unit.name} begins casting ${ability.name}...`);
+      state.log.push(`${unit.name} begins casting ${ability.name} (CT ${castTime})...`);
       pushEvent(state, {
         kind: 'cast_start',
         unitId: unit.id,
@@ -326,12 +329,14 @@ export function applyAction(state, action) {
         target: { x: action.target.x, y: action.target.y },
         text: ability.name,
         color: '#66ccff',
+        castTime,
       });
       state.lastPresentation = {
         type: 'cast_start',
         unitId: unit.id,
         abilityId: action.abilityId,
         presentation: ability.presentation || 'cast',
+        castTime,
       };
       // Charging ends the turn immediately (FFT-like)
       return finishTurn(state, unit);

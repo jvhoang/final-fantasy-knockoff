@@ -227,10 +227,28 @@ export const ARMOR_VISUAL = {
  * @param {string} [armorId]
  * @param {'m'|'f'} [gender='m']
  */
+/** Per-item overrides so equip changes are visible (e.g. Blood Sword crimson) */
+export const WEAPON_ID_VISUAL = {
+  blood_sword: { mesh: 'blade', length: 0.58, color: 0xb91c1c, glow: 0x7f1d1d },
+  coral_sword: { mesh: 'blade', length: 0.55, color: 0xfb7185 },
+  diamond_sword: { mesh: 'blade', length: 0.58, color: 0xe0f2fe },
+  mythril_sword: { mesh: 'blade', length: 0.55, color: 0x94a3b8 },
+  longsword: { mesh: 'blade', length: 0.56, color: 0xcbd5e1 },
+  sword: { mesh: 'blade', length: 0.52, color: 0xc0c0c0 },
+  mythril_bow: { mesh: 'bow', length: 0.48, color: 0x64748b },
+  crossbow: { mesh: 'bow', length: 0.42, color: 0x78716c },
+  bow: { mesh: 'bow', length: 0.45, color: 0x8b5a2b },
+  wizard_staff: { mesh: 'staff', length: 0.72, color: 0x6d28d9 },
+  kikuichimonji: { mesh: 'blade', length: 0.6, color: 0xf8fafc },
+  katana: { mesh: 'blade', length: 0.55, color: 0xd4d4d8 },
+};
+
 export function resolveUnitVisual(jobId, weaponId = 'sword', armorId = 'leather', gender = 'm') {
   const job = JOB_KITS[jobId] || JOB_KITS.squireling;
   const weaponType = weaponTypeFromId(weaponId);
   const armorType = armorTypeFromId(armorId);
+  const baseWep = WEAPON_VISUAL[weaponType] || WEAPON_VISUAL.sword;
+  const idWep = WEAPON_ID_VISUAL[weaponId] || null;
   return {
     ...job,
     weaponId,
@@ -238,7 +256,7 @@ export function resolveUnitVisual(jobId, weaponId = 'sword', armorId = 'leather'
     gender: gender === 'f' ? 'f' : 'm',
     weaponType,
     armorType,
-    weaponVisual: WEAPON_VISUAL[weaponType] || WEAPON_VISUAL.sword,
+    weaponVisual: idWep ? { ...baseWep, ...idWep } : { ...baseWep },
     armorVisual: ARMOR_VISUAL[armorType] || ARMOR_VISUAL.leather,
     // Prefer weapon attach from equipped weapon type
     weaponAttach:

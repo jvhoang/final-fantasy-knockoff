@@ -112,9 +112,13 @@ export function buildUnitMesh(unit, team) {
   );
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = 0.02;
+  ring.name = 'teamRing';
   root.add(ring);
+  root.userData._teamRing = ring;
+  root.userData.weaponId = unit.weaponId;
+  root.userData.armorId = unit.armorId;
 
-  // Weapon
+  // Weapon — color/shape follows equipped item (Blood Sword, bows, etc.)
   const weapon = buildWeaponMesh(vis.weaponAttach, vis.weaponVisual);
   weapon.name = 'weapon';
   weapon.position.set(0.22, 0.5, 0.05);
@@ -124,6 +128,8 @@ export function buildUnitMesh(unit, team) {
     weapon.position.set(0.18, 0.35, 0);
   } else if (vis.weaponAttach === 'fist') {
     weapon.position.set(0.2, 0.45, 0.1);
+  } else if (vis.weaponAttach === 'spear') {
+    weapon.position.set(0.2, 0.4, 0.05);
   }
   root.add(weapon);
 
@@ -223,7 +229,8 @@ export function setUnitFacing(mesh, facing, opts = {}) {
  * @param {number} animT seconds into anim
  */
 export function attackYawOffset(baseYaw, animT) {
-  const swing = Math.sin(Math.min(animT * 8, Math.PI)) * 0.35;
+  // Body yaw stays within a small envelope (weapon carries the big swing arc)
+  const swing = Math.sin(Math.min(animT * 5.5, Math.PI)) * 0.42;
   return baseYaw + swing;
 }
 
@@ -287,19 +294,35 @@ export function tickUnitAnim(mesh, anim, dt) {
     mesh.position.y = baseY + Math.abs(Math.sin(t * 10)) * 0.06;
     mesh.rotation.z = Math.sin(t * 10) * 0.08;
   } else if (anim === 'attack') {
-    // Temporary swing offset only — no mesh.rotation.y += dt (that permanently spun units)
+    // Longer, readable sword swing (body lean + weapon arc)
+    const phase = Math.min(t * 5.5, Math.PI * 1.15);
     mesh.rotation.y = attackYawOffset(baseYaw, t);
-    if (weapon) weapon.rotation.z = -Math.sin(Math.min(t * 8, Math.PI)) * 1.2;
+    mesh.rotation.z = Math.sin(phase) * 0.18;
+    mesh.position.y = baseY + Math.sin(Math.min(phase, Math.PI)) * 0.06;
+    if (weapon) {
+      weapon.rotation.z = -Math.sin(phase) * 1.65;
+      weapon.rotation.x = Math.sin(phase * 0.8) * 0.35;
+      if (weapon.position) weapon.position.y = 0.5 + Math.sin(phase) * 0.08;
+    }
   } else if (anim === 'cast') {
     mesh.rotation.y = baseYaw;
-    mesh.position.y = baseY + 0.08 + Math.sin(t * 6) * 0.03;
-    if (weapon) weapon.rotation.x = Math.sin(t * 4) * 0.4;
+    mesh.position.y = baseY + 0.1 + Math.sin(t * 6) * 0.04;
+    mesh.rotation.z = Math.sin(t * 3) * 0.05;
+    if (weapon) {
+      weapon.rotation.x = -0.4 + Math.sin(t * 5) * 0.55;
+      if (weapon.position) weapon.position.y = 0.55 + Math.sin(t * 4) * 0.06;
+    }
   } else if (anim === 'summon') {
     mesh.rotation.y = baseYaw;
-    mesh.position.y = baseY + 0.15 + Math.sin(t * 8) * 0.05;
-    mesh.scale.setScalar(1 + Math.sin(t * 5) * 0.05);
+    mesh.position.y = baseY + 0.18 + Math.sin(t * 7) * 0.07;
+    mesh.scale.setScalar(1 + Math.sin(t * 5) * 0.08);
+    if (weapon) weapon.rotation.x = Math.sin(t * 6) * 0.7;
   } else if (anim === 'hit') {
+    // Visible hurt: flinch, lean back, slight shrink
     mesh.rotation.y = baseYaw;
-    mesh.rotation.z = Math.sin(t * 20) * 0.2;
+    mesh.rotation.z = Math.sin(t * 18) * 0.28;
+    mesh.rotation.x = -0.12 + Math.sin(t * 14) * 0.08;
+    mesh.position.y = baseY + Math.abs(Math.sin(t * 16)) * 0.04;
+    mesh.scale.setScalar(0.94 + Math.sin(t * 20) * 0.03);
   }
 }

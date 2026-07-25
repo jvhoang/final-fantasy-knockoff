@@ -19,14 +19,20 @@ import {
   TEAM_GIL_BUDGET,
 } from '../core/loadout.js';
 import { ABILITIES, getAbility, formatAbilityDetail } from '../content/abilities.js';
-import { abilityRangeTiles } from '../core/grid.js';
+import { previewRangeAndAoe } from '../core/range-preview.js';
+import { computeStatDeltas, formatStatDelta } from '../core/stat-delta.js';
 import { TEAMS } from '../core/constants.js';
 import { WATER_RULES } from '../content/map-castle.js';
 import { resolveIcon, portraitIcon } from '../content/icons.js';
 import { itemIconUrl } from '../content/items.js';
+import {
+  CALCULATOR_CT_NUMBERS,
+  isMathAbility,
+  listCalculatorCtNumbers,
+} from '../content/calculator.js';
 import { ArenaRenderer } from './arena.js';
 import { BattlePresentation } from './battle-presentation.js';
-import { WALK_MS_PER_STEP, ATTACK_HOLD_MS } from './presentation-timing.js';
+import { WALK_MS_PER_STEP, BATTLE_INTRO_MS } from './presentation-timing.js';
 import { audio } from './audio.js';
 import { MSG } from '../net/protocol.js';
 import { buildUnitMesh } from './unit-mesh.js';
@@ -53,6 +59,11 @@ export class GameApp {
     this.onlineTeam = 'player';
     this.inspectId = null;
     this._waitFacing = 'N';
+    this._mathCtNumber = 3;
+    this._statDeltaFlash = null;
+    this._prevLoadoutStats = null;
+    this._lastFocusedTurnId = null;
+    this._hoverAoeTile = null;
     this._buildShell();
   }
 
@@ -161,13 +172,13 @@ export class GameApp {
             <div class="loadout-stats" id="loadout-stats">
               <h3>Attributes · ${escapeHtml(preview.name)}</h3>
               <table class="stat-table">
-                <tr><td>HP</td><td id="st-hp">${s.hp}</td><td>MP</td><td id="st-mp">${s.mp}</td></tr>
-                <tr><td>Speed</td><td id="st-speed">${s.speed}</td><td>Move</td><td id="st-move">${s.move}</td></tr>
-                <tr><td>Jump</td><td id="st-jump">${s.jump}</td><td>Def</td><td id="st-def">${s.def}</td></tr>
-                <tr><td>PA</td><td id="st-pa">${s.pa}</td><td>MA</td><td id="st-ma">${s.ma}</td></tr>
-                <tr><td>Wpn ATK</td><td id="st-watk">${s.weaponAtk}</td><td>Wpn Rng</td><td id="st-wrng">${escapeHtml(s.weaponRange)}</td></tr>
+                <tr><td>HP</td><td id="st-hp">${s.hp}${deltaSpan(this._statDeltaFlash, 'hp')}</td><td>MP</td><td id="st-mp">${s.mp}${deltaSpan(this._statDeltaFlash, 'mp')}</td></tr>
+                <tr><td>Speed</td><td id="st-speed">${s.speed}${deltaSpan(this._statDeltaFlash, 'speed')}</td><td>Move</td><td id="st-move">${s.move}${deltaSpan(this._statDeltaFlash, 'move')}</td></tr>
+                <tr><td>Jump</td><td id="st-jump">${s.jump}${deltaSpan(this._statDeltaFlash, 'jump')}</td><td>Def</td><td id="st-def">${s.def}${deltaSpan(this._statDeltaFlash, 'def')}</td></tr>
+                <tr><td>PA</td><td id="st-pa">${s.pa}${deltaSpan(this._statDeltaFlash, 'pa')}</td><td>MA</td><td id="st-ma">${s.ma}${deltaSpan(this._statDeltaFlash, 'ma')}</td></tr>
+                <tr><td>Wpn ATK</td><td id="st-watk">${s.weaponAtk}${deltaSpan(this._statDeltaFlash, 'weaponAtk')}</td><td>Wpn Rng</td><td id="st-wrng">${escapeHtml(s.weaponRange)}</td></tr>
               </table>
-              <p class="hint">Kit: ${escapeHtml(preview.visual.silhouette)} · ${escapeHtml(preview.visual.weaponAttach)} · <strong id="unit-gil">${preview.gilCost}g</strong></p>
+              <p class="hint">Kit: ${escapeHtml(preview.visual.silhouette)} · ${escapeHtml(preview.visual.weaponAttach)} · ${escapeHtml(preview.weapon?.name || '')} · <strong id="unit-gil">${preview.gilCost}g</strong></p>
             </div>
           </div>
         </div>
@@ -217,15 +228,30 @@ export class GameApp {
     `;
 
     this._mountLoadoutPreview(preview);
+    // Clear flash after brief display
+    if (this._statDeltaFlash) {
+      clearTimeout(this._deltaFlashT);
+      this._deltaFlashT = setTimeout(() => {
+        this._statDeltaFlash = null;
+        // Soft re-render without wiping form focus if still on loadout
+        const cells = this.screens.querySelectorAll('.stat-delta');
+        cells.forEach((c) => c.remove());
+      }, 2800);
+    }
 
     const refresh = () => {
+      const before = previewLoadout(this.loadouts[this.selectedUnitIdx]).stats;
       this._commitLoadoutForm();
+      const after = previewLoadout(this.loadouts[this.selectedUnitIdx]).stats;
+      const deltas = computeStatDeltas(before, after);
+      this._statDeltaFlash = deltas.length ? Object.fromEntries(deltas.map((d) => [d.key, d.delta])) : null;
       this.renderLoadout();
     };
     this.screens.querySelectorAll('.tab').forEach((btn) => {
       btn.onclick = () => {
         this._commitLoadoutForm();
         this.selectedUnitIdx = Number(btn.dataset.i);
+        this._statDeltaFlash = null;
         this.renderLoadout();
       };
     });
@@ -335,7 +361,10 @@ export class GameApp {
       return;
     }
     this.mode = 'battle';
+    this._lastFocusedTurnId = null;
     this.renderBattle();
+    // Battle begins intro: wide shot + banner, then zoom to first actor
+    await this._playBattleBeginsIntro();
     // Snapshot units at spawn positions, then AI may move — walk those paths
     this.pres?.resetEvents(this.match);
     const ev0 = this.match.events?.length || 0;
@@ -348,6 +377,40 @@ export class GameApp {
     this.refreshBattle();
   }
 
+  /**
+   * ~4s "Battle begins" with arena wide view, then zoom/autorotate to first actor.
+   */
+  async _playBattleBeginsIntro() {
+    if (!this.arena || !this.match) return;
+    const banner = this.screens.querySelector('#battle-banner');
+    if (banner) {
+      banner.classList.remove('hidden');
+      banner.textContent = 'Battle begins';
+      banner.classList.add('intro');
+    }
+    const first = getUnit(this.match, this.match.activeUnitId) || this.match.units.find((u) => u.alive);
+    const facing = first?.facing || 'S';
+    try {
+      await this.arena.playBattleIntro(
+        this.match.map,
+        first?.id || this.match.units[0]?.id,
+        facing,
+        BATTLE_INTRO_MS
+      );
+    } catch {
+      /* camera optional in headless */
+    }
+    if (banner && this.match.phase === 'battle') {
+      banner.classList.add('hidden');
+      banner.classList.remove('intro');
+      banner.textContent = '';
+    }
+    if (first) {
+      this.arena.setActiveHighlight(first.id, this.match.map, { x: first.x, y: first.y });
+      this._lastFocusedTurnId = first.id;
+    }
+  }
+
   renderBattle() {
     this.screens.innerHTML = `
       <section class="battle-layout battle-layout-v2">
@@ -357,6 +420,7 @@ export class GameApp {
             <div id="arena-host" class="arena-host"></div>
             <div id="float-layer" class="float-layer"></div>
             <div id="battle-banner" class="battle-banner hidden"></div>
+            <div id="cast-name-banner" class="cast-name-banner" aria-live="polite"></div>
           </div>
           <div id="bottom-unit-panel" class="bottom-unit-panel" aria-label="Unit status">
             <em>Active / selected unit status appears here</em>
@@ -407,9 +471,11 @@ export class GameApp {
       this.showMenu();
     };
     this.arena.renderer.domElement.addEventListener('click', (e) => this.onArenaClick(e));
+    this.arena.renderer.domElement.addEventListener('pointermove', (e) => this.onArenaHover(e));
     window.addEventListener('keydown', this._onBattleKey);
     // Immediate bottom panel for active unit (before slow AI playback finishes)
     this._renderBottomUnitPanel(this.match.activeUnitId);
+    this._renderCommandBar();
   }
 
   _onBattleKey = (e) => {
@@ -436,7 +502,10 @@ export class GameApp {
   refreshBattle() {
     if (!this.match || !this.arena) return;
     this.arena.syncUnits(this.match.units, this.match.map);
-    this.arena.clearRanges();
+    // Preserve range preview while targeting; clear only when idle
+    if (this.uiMode === 'idle' || this.uiMode === 'wait-face') {
+      this.arena.clearRanges();
+    }
 
     // Phase banners
     const banner = this.screens.querySelector('#battle-banner');
@@ -451,7 +520,6 @@ export class GameApp {
 
     const turnEl = this.screens.querySelector('#hud-turn');
     const ctEl = this.screens.querySelector('#hud-ct');
-    const actEl = this.screens.querySelector('#hud-actions');
     const logEl = this.screens.querySelector('#hud-log');
 
     const active = getUnit(this.match, this.match.activeUnitId);
@@ -460,10 +528,19 @@ export class GameApp {
         ? `<br/><span class="casting">Casting ${escapeHtml(getAbility(active.charging.abilityId).name)}… (${active.charging.chargeLeft}/${active.charging.castTime})</span>`
         : '';
       turnEl.innerHTML = `<strong>${escapeHtml(active.name)}</strong> (${active.team === 'player' ? 'Ally' : 'Foe'})<br/>HP ${active.hp}/${active.maxHp} · MP ${active.mp}/${active.maxMp} · CT ${active.ct}${ch}`;
+      // Active unit + tile highlight always during their turn
+      this.arena.setActiveHighlight(active.id, this.match.map, { x: active.x, y: active.y });
+      // Autopan/autorotate so active unit is centered and front-facing (once per turn id)
+      if (this._lastFocusedTurnId !== active.id && !this.pres?.busy) {
+        this._lastFocusedTurnId = active.id;
+        void this.arena.focusOnUnit(active.id, { facing: active.facing || 'S', zoom: 6.5, ms: 800 });
+      }
     } else if (this.match.phase === 'victory') {
       turnEl.innerHTML = '<strong>Victory!</strong>';
+      this.arena.setActiveHighlight(null);
     } else if (this.match.phase === 'defeat') {
       turnEl.innerHTML = '<strong>Defeat…</strong>';
+      this.arena.setActiveHighlight(null);
     } else {
       turnEl.innerHTML = 'Advancing CT…';
     }
@@ -491,27 +568,77 @@ export class GameApp {
     // Bottom panel: selected unit, else active turn unit
     this._renderBottomUnitPanel(this.inspectId || this.match.activeUnitId);
 
-    actEl.innerHTML = '';
+    // Command bar always visible (Move / Ability / Wait + open submenu)
+    this._renderCommandBar();
+  }
+
+  /**
+   * Move / Ability / Wait always visible on controllable turns; submenu stays mounted.
+   */
+  _renderCommandBar() {
+    const actEl = this.screens.querySelector('#hud-actions');
     const waitFace = this.screens.querySelector('#hud-wait-face');
-    waitFace?.classList.add('hidden');
+    if (!actEl || !this.match) return;
+
+    const active = getUnit(this.match, this.match.activeUnitId);
+    const canControl =
+      this.match.phase === 'battle' && active && this._canControl(active) && !this.pres?.busy;
 
     if (this.uiMode === 'wait-face') {
+      // Keep primary actions visible above wait-face
+      actEl.innerHTML = `
+        <div class="cmd-row">
+          <button type="button" id="act-move" class="btn small" disabled>Move</button>
+          <button type="button" id="act-act" class="btn small" disabled>Ability</button>
+          <button type="button" id="act-wait" class="btn small primary">Wait / Face</button>
+        </div>
+        <div id="ability-list" class="ability-list"></div>
+      `;
       this._renderWaitFaceUi();
       return;
     }
 
-    if (this.match.phase === 'battle' && active && this._canControl(active) && !this.pres?.busy) {
-      actEl.innerHTML = `
-        <button type="button" id="act-move" class="btn small" ${this.match.turn.moved ? 'disabled' : ''}>Move</button>
-        <button type="button" id="act-act" class="btn small" ${this.match.turn.acted ? 'disabled' : ''}>Ability</button>
-        <button type="button" id="act-wait" class="btn small primary">Wait / Face</button>
-        <div id="ability-list"></div>
-      `;
-      actEl.querySelector('#act-move').onclick = () => this.enterMoveMode();
-      actEl.querySelector('#act-act').onclick = () => this.enterActMode();
-      actEl.querySelector('#act-wait').onclick = () => this.enterWaitFace();
-    } else if (this.match.phase === 'battle' && active?.team === TEAMS.ENEMY && this.match.mode === 'ai') {
-      actEl.innerHTML = `<em>Enemy phase…</em>`;
+    waitFace?.classList.add('hidden');
+
+    if (!canControl) {
+      if (this.match.phase === 'battle' && active?.team === TEAMS.ENEMY && this.match.mode === 'ai') {
+        actEl.innerHTML = `<em class="enemy-phase">Enemy phase…</em>
+          <div class="cmd-row muted">
+            <button type="button" class="btn small" disabled>Move</button>
+            <button type="button" class="btn small" disabled>Ability</button>
+            <button type="button" class="btn small" disabled>Wait</button>
+          </div>`;
+      } else {
+        actEl.innerHTML = `<div class="cmd-row muted">
+            <button type="button" class="btn small" disabled>Move</button>
+            <button type="button" class="btn small" disabled>Ability</button>
+            <button type="button" class="btn small" disabled>Wait</button>
+          </div>`;
+      }
+      return;
+    }
+
+    const moveOn = this.uiMode === 'move' ? 'primary' : '';
+    const actOn = this.uiMode === 'pick-ability' || this.uiMode === 'act' ? 'primary' : '';
+    actEl.innerHTML = `
+      <div class="cmd-row">
+        <button type="button" id="act-move" class="btn small ${moveOn}" ${this.match.turn.moved ? 'disabled' : ''}>Move</button>
+        <button type="button" id="act-act" class="btn small ${actOn}" ${this.match.turn.acted ? 'disabled' : ''}>Ability</button>
+        <button type="button" id="act-wait" class="btn small">Wait / Face</button>
+      </div>
+      <div id="ability-list" class="ability-list"></div>
+      <div id="math-ct-picker" class="math-ct-picker hidden"></div>
+    `;
+    actEl.querySelector('#act-move').onclick = () => this.enterMoveMode();
+    actEl.querySelector('#act-act').onclick = () => this.enterActMode();
+    actEl.querySelector('#act-wait').onclick = () => this.enterWaitFace();
+
+    // Restore open submenu if still targeting
+    if (this.uiMode === 'pick-ability' || this.uiMode === 'act') {
+      this._populateAbilityList(active);
+      if (this.uiMode === 'act' && this.selectedAbility) {
+        this._showAbilityRange(active, this.selectedAbility);
+      }
     }
   }
 
@@ -577,10 +704,13 @@ export class GameApp {
     if (!active || this.match.turn.moved) return;
     this.uiMode = 'move';
     this.selectedAbility = null;
+    this._hoverAoeTile = null;
+    audio.sfx('select');
     const range = getMoveRange(this.match, active);
     const tiles = [...range.values()].map((n) => ({ x: n.x, y: n.y }));
     this.arena.clearRanges();
     this.arena.showRange(tiles, 0x3b82f6, this.match.map);
+    this._renderCommandBar();
     this.toast('Select destination (walk path animated)');
   }
 
@@ -588,29 +718,105 @@ export class GameApp {
     const active = getUnit(this.match, this.match.activeUnitId);
     if (!active || this.match.turn.acted) return;
     this.uiMode = 'pick-ability';
+    this.selectedAbility = null;
+    this._hoverAoeTile = null;
+    audio.sfx('select');
+    this._renderCommandBar();
+    this._populateAbilityList(active);
+  }
+
+  _populateAbilityList(active) {
     const list = this.screens.querySelector('#ability-list');
-    if (!list) return;
+    if (!list || !active) return;
     list.innerHTML = active.abilities
       .map((id) => {
         const a = formatAbilityDetail(id);
-        return `<button type="button" class="btn tiny ab" data-id="${id}" title="${escapeHtml(a.description)}">${escapeHtml(a.name)} (${a.mpCost} MP${a.castTime ? ' · CT' + a.castTime : ''})</button>`;
+        const math = isMathAbility(id);
+        return `<button type="button" class="btn tiny ab ${this.selectedAbility === id ? 'primary' : ''}" data-id="${id}" title="${escapeHtml(a.description)}">${escapeHtml(a.name)} (${a.mpCost} MP${a.castTime ? ' · CT' + a.castTime : ''}${math ? ' · Math' : ''})</button>`;
       })
       .join('');
     list.querySelectorAll('.ab').forEach((btn) => {
       btn.onclick = () => {
         this.selectedAbility = btn.dataset.id;
         this.uiMode = 'act';
-        const ab = getAbility(this.selectedAbility);
-        let tiles =
-          ab.maxRange === 0
-            ? [{ x: active.x, y: active.y }]
-            : abilityRangeTiles(this.match.map, active, ab.minRange, ab.maxRange);
-        if (ab.minRange === 0 && ab.maxRange > 0) tiles.push({ x: active.x, y: active.y });
-        this.arena.clearRanges();
-        this.arena.showRange(tiles, 0xef4444, this.match.map);
-        this.toast(`Target for ${ab.name}`);
+        audio.sfx('ui');
+        this._showAbilityRange(active, this.selectedAbility);
+        this._renderMathCtPicker(this.selectedAbility);
+        this.toast(`Target for ${getAbility(this.selectedAbility).name} — hover for AoE`);
+        // Re-mark selected button
+        list.querySelectorAll('.ab').forEach((b) => b.classList.toggle('primary', b.dataset.id === this.selectedAbility));
       };
     });
+  }
+
+  _renderMathCtPicker(abilityId) {
+    const el = this.screens.querySelector('#math-ct-picker');
+    if (!el) return;
+    if (!isMathAbility(abilityId)) {
+      el.classList.add('hidden');
+      el.innerHTML = '';
+      return;
+    }
+    el.classList.remove('hidden');
+    const nums = listCalculatorCtNumbers();
+    el.innerHTML = `
+      <div class="math-ct-label">Calculator CT number</div>
+      <div class="math-ct-row">
+        ${nums
+          .map(
+            (n) =>
+              `<button type="button" class="btn tiny ct-num ${this._mathCtNumber === n ? 'primary' : ''}" data-ct="${n}">${n}</button>`
+          )
+          .join('')}
+      </div>
+    `;
+    el.querySelectorAll('.ct-num').forEach((b) => {
+      b.onclick = () => {
+        this._mathCtNumber = Number(b.dataset.ct);
+        this._renderMathCtPicker(abilityId);
+        audio.sfx('select');
+      };
+    });
+  }
+
+  _showAbilityRange(active, abilityId, hover = null) {
+    if (!active || !abilityId) return;
+    const { range, aoe } = previewRangeAndAoe(
+      this.match.map,
+      { x: active.x, y: active.y },
+      abilityId,
+      hover
+    );
+    this.arena.showRangeAndAoe(range, aoe, this.match.map);
+  }
+
+  onArenaHover(e) {
+    if (!this.match || this.uiMode !== 'act' || !this.selectedAbility) return;
+    if (this.pres?.busy) return;
+    const t = this.arena.hoverTile?.(e) ?? this._hoverPickTile(e);
+    if (!t) return;
+    const key = `${t.x},${t.y}`;
+    const prev = this._hoverAoeTile ? `${this._hoverAoeTile.x},${this._hoverAoeTile.y}` : '';
+    if (key === prev) return;
+    this._hoverAoeTile = t;
+    const active = getUnit(this.match, this.match.activeUnitId);
+    if (active) this._showAbilityRange(active, this.selectedAbility, t);
+  }
+
+  /** Raycast without consuming click-suppression (for AoE hover preview). */
+  _hoverPickTile(e) {
+    if (!this.arena) return null;
+    const rect = this.arena.renderer.domElement.getBoundingClientRect();
+    this.arena.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    this.arena.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    this.arena.raycaster.setFromCamera(this.arena.pointer, this.arena.camera);
+    const hits = this.arena.raycaster.intersectObjects(this.arena.mapGroup.children, true);
+    for (const hit of hits) {
+      let o = hit.object;
+      while (o && !o.userData?.tile) o = o.parent;
+      if (o?.userData?.tile) return { x: o.userData.x, y: o.userData.y };
+    }
+    return null;
   }
 
   enterWaitFace() {
@@ -697,14 +903,21 @@ export class GameApp {
       return;
     }
     if (this.uiMode === 'act' && this.selectedAbility) {
-      await this.submitAction({
+      // Confirm with range+AoE still shown
+      this._showAbilityRange(active, this.selectedAbility, tile);
+      const action = {
         type: 'act',
         unitId: active.id,
         abilityId: this.selectedAbility,
         target: { x: tile.x, y: tile.y },
-      });
+      };
+      if (isMathAbility(this.selectedAbility)) {
+        action.ctNumber = this._mathCtNumber;
+      }
+      await this.submitAction(action);
       this.uiMode = 'idle';
       this.selectedAbility = null;
+      this._hoverAoeTile = null;
       this.arena.clearRanges();
     }
   }
@@ -865,6 +1078,18 @@ function escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/**
+ * Green/red signed delta next to a stat value.
+ * @param {Record<string, number>|null} flash
+ * @param {string} key
+ */
+function deltaSpan(flash, key) {
+  if (!flash || flash[key] == null || flash[key] === 0) return '';
+  const d = flash[key];
+  const cls = d > 0 ? 'stat-delta up' : 'stat-delta down';
+  return ` <span class="${cls}">${formatStatDelta(d)}</span>`;
 }
 
 function loadLastLoadout() {
