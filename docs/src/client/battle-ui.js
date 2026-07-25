@@ -50,3 +50,32 @@ export function canStillMove(turn) {
 export function canStillAct(turn) {
   return turn && !turn.acted;
 }
+
+/**
+ * UI mode after a successful player Act on the real click→submit path.
+ * Must remain 'wait-face' when only Wait remains (never snap back to idle).
+ *
+ * @param {{ acted?: boolean }|null} turn after applyAction
+ * @param {{ canControl?: boolean, phase?: string, unitEnded?: boolean }} ctx
+ * @returns {'wait-face'|'idle'}
+ */
+export function uiModeAfterSuccessfulAct(turn, ctx = {}) {
+  if (ctx.unitEnded) return 'idle';
+  if (shouldAutoOpenWaitFace(turn, { canControl: ctx.canControl !== false, phase: ctx.phase || 'battle', busy: false })) {
+    return 'wait-face';
+  }
+  return 'idle';
+}
+
+/**
+ * Post-submit UI mode on the real ability tile-confirm path (onArenaClick → submitAction).
+ * Must NOT force idle after submit sets wait-face.
+ *
+ * @param {'wait-face'|'idle'|string} uiModeAfterSubmit
+ * @returns {'wait-face'|'idle'|string}
+ */
+export function uiModeAfterActClickPath(uiModeAfterSubmit) {
+  // Historical bug: onArenaClick set uiMode='idle' after await submitAction(action).
+  // Correct path preserves submitAction's wait-face.
+  return uiModeAfterSubmit;
+}

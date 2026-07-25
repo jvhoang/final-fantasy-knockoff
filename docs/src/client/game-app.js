@@ -34,7 +34,7 @@ import { ArenaRenderer } from './arena.js';
 import { BattlePresentation } from './battle-presentation.js';
 import { WALK_MS_PER_STEP, BATTLE_INTRO_MS } from './presentation-timing.js';
 import { audio } from './audio.js';
-import { TURN_FOCUS_ZOOM, shouldAutoOpenWaitFace } from './battle-ui.js';
+import { TURN_FOCUS_ZOOM, shouldAutoOpenWaitFace, uiModeAfterSuccessfulAct } from './battle-ui.js';
 import { MSG } from '../net/protocol.js';
 import { buildUnitMesh } from './unit-mesh.js';
 import * as THREE from 'three';
@@ -194,20 +194,7 @@ export class GameApp {
               })
               .join('')}
           </div>
-          <div class="loadout-sticky-preview-row">
-            <div id="loadout-preview" class="loadout-preview" aria-label="Character preview"></div>
-            <div class="loadout-stats" id="loadout-stats">
-              <h3>Attributes · ${escapeHtml(preview.name)}</h3>
-              <table class="stat-table">
-                <tr><td>HP</td><td id="st-hp">${s.hp}${deltaSpan(this._statDeltaFlash, 'hp')}</td><td>MP</td><td id="st-mp">${s.mp}${deltaSpan(this._statDeltaFlash, 'mp')}</td></tr>
-                <tr><td>Speed</td><td id="st-speed">${s.speed}${deltaSpan(this._statDeltaFlash, 'speed')}</td><td>Move</td><td id="st-move">${s.move}${deltaSpan(this._statDeltaFlash, 'move')}</td></tr>
-                <tr><td>Jump</td><td id="st-jump">${s.jump}${deltaSpan(this._statDeltaFlash, 'jump')}</td><td>Def</td><td id="st-def">${s.def}${deltaSpan(this._statDeltaFlash, 'def')}</td></tr>
-                <tr><td>PA</td><td id="st-pa">${s.pa}${deltaSpan(this._statDeltaFlash, 'pa')}</td><td>MA</td><td id="st-ma">${s.ma}${deltaSpan(this._statDeltaFlash, 'ma')}</td></tr>
-                <tr><td>Wpn ATK</td><td id="st-watk">${s.weaponAtk}${deltaSpan(this._statDeltaFlash, 'weaponAtk')}</td><td>Wpn Rng</td><td id="st-wrng">${escapeHtml(s.weaponRange)}</td></tr>
-              </table>
-              <p class="hint">Kit: ${escapeHtml(preview.visual.silhouette)} · ${escapeHtml(preview.weapon?.name || '')} · <strong id="unit-gil">${preview.gilCost}g</strong></p>
-            </div>
-          </div>
+          <!-- Chips first: primary picks reachable without scrolling past tall preview -->
           <div class="loadout-chip-pickers" id="loadout-chip-pickers">
             <div class="chip-row">
               <span class="chip-label">Job</span>
@@ -247,6 +234,20 @@ export class GameApp {
               <button type="button" id="lo-done" class="btn" ${budget.ok ? '' : 'disabled'}>${
                 this._loadoutNext === 'ai' ? 'Start vs AI' : this._loadoutNext === 'online' ? 'Continue Online' : 'Back'
               }</button>
+            </div>
+          </div>
+          <div class="loadout-sticky-preview-row">
+            <div id="loadout-preview" class="loadout-preview" aria-label="Character preview"></div>
+            <div class="loadout-stats" id="loadout-stats">
+              <h3>Attributes · ${escapeHtml(preview.name)}</h3>
+              <table class="stat-table">
+                <tr><td>HP</td><td id="st-hp">${s.hp}${deltaSpan(this._statDeltaFlash, 'hp')}</td><td>MP</td><td id="st-mp">${s.mp}${deltaSpan(this._statDeltaFlash, 'mp')}</td></tr>
+                <tr><td>Speed</td><td id="st-speed">${s.speed}${deltaSpan(this._statDeltaFlash, 'speed')}</td><td>Move</td><td id="st-move">${s.move}${deltaSpan(this._statDeltaFlash, 'move')}</td></tr>
+                <tr><td>Jump</td><td id="st-jump">${s.jump}${deltaSpan(this._statDeltaFlash, 'jump')}</td><td>Def</td><td id="st-def">${s.def}${deltaSpan(this._statDeltaFlash, 'def')}</td></tr>
+                <tr><td>PA</td><td id="st-pa">${s.pa}${deltaSpan(this._statDeltaFlash, 'pa')}</td><td>MA</td><td id="st-ma">${s.ma}${deltaSpan(this._statDeltaFlash, 'ma')}</td></tr>
+                <tr><td>Wpn ATK</td><td id="st-watk">${s.weaponAtk}${deltaSpan(this._statDeltaFlash, 'weaponAtk')}</td><td>Wpn Rng</td><td id="st-wrng">${escapeHtml(s.weaponRange)}</td></tr>
+              </table>
+              <p class="hint">Kit: ${escapeHtml(preview.visual.silhouette)} · ${escapeHtml(preview.weapon?.name || '')} · <strong id="unit-gil">${preview.gilCost}g</strong></p>
             </div>
           </div>
         </div>
@@ -998,11 +999,13 @@ export class GameApp {
         action.ctNumber = this._mathCtNumber;
       }
       await this.submitAction(action);
-      // After act, prefer auto Wait/Face rather than idle (if turn still ours)
-      this.uiMode = 'idle';
+      // submitAction sets uiMode='wait-face' when Act leaves only Wait — never force idle here
       this.selectedAbility = null;
       this._hoverAoeTile = null;
       this.arena.clearRanges();
+      if (this.uiMode !== 'wait-face') {
+        this._maybeAutoWaitFace();
+      }
     }
   }
 
@@ -1038,11 +1041,14 @@ export class GameApp {
     }
 
     // If we just acted and still control this unit, open Wait/Face immediately
-    if (action.type === 'act' && this.match.turn?.acted && !this.match.turn?.unitEnded) {
+    if (action.type === 'act') {
       const active = getUnit(this.match, this.match.activeUnitId);
-      if (active && this._canControl(active) && this.match.phase === 'battle') {
-        this.uiMode = 'wait-face';
-      }
+      const canControl = !!(active && this._canControl(active) && this.match.phase === 'battle');
+      this.uiMode = uiModeAfterSuccessfulAct(this.match.turn, {
+        canControl,
+        phase: this.match.phase,
+        unitEnded: !active || this.match.activeUnitId !== action.unitId,
+      });
     }
 
     this.refreshBattle();

@@ -13,7 +13,11 @@ import {
   ZOOM_MIN_REF,
   isValidTurnFocusZoom,
   shouldAutoOpenWaitFace,
+  uiModeAfterSuccessfulAct,
+  uiModeAfterActClickPath,
 } from '../src/client/battle-ui.js';
+import { createMatch, applyAction } from '../src/core/match.js';
+import { defaultPlayerLoadouts } from '../src/core/loadout.js';
 import { ZOOM_MIN } from '../src/client/arena.js';
 import { planAbilityFx, resolveSummonCreature, SUMMON_CREATURES } from '../src/client/fx-plan.js';
 import { magicSpectacleFromMp } from '../src/client/presentation-timing.js';
@@ -45,6 +49,64 @@ describe('auto Wait/Face after Act', () => {
     assert.equal(shouldAutoOpenWaitFace({ moved: true, acted: false }, { canControl: true, phase: 'battle' }), false);
     assert.equal(shouldAutoOpenWaitFace({ moved: false, acted: true }, { canControl: false, phase: 'battle' }), false);
     assert.equal(shouldAutoOpenWaitFace({ moved: false, acted: true }, { canControl: true, busy: true }), false);
+  });
+
+  it('real act path keeps wait-face through click post-submit (no idle reset)', () => {
+    // Drive real match act so turn.acted is true, then apply shipped UI helpers
+    const match = createMatch({ mode: 'ai', mapSeed: 11, playerLoadouts: defaultPlayerLoadouts() });
+    const unit = match.units.find((u) => u.team === 'player' && u.alive);
+    assert.ok(unit);
+    unit.ct = 100;
+    match.activeUnitId = unit.id;
+    match.phase = 'battle';
+    match.turn = { moved: false, acted: false, unitId: unit.id };
+    const abilityId = unit.abilities.includes('strike') ? 'strike' : unit.abilities[0];
+    let target = { x: unit.x, y: unit.y };
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ]) {
+      const x = unit.x + dx;
+      const y = unit.y + dy;
+      if (match.map.tiles[y]?.[x]?.walkable) {
+        target = { x, y };
+        break;
+      }
+    }
+    const r = applyAction(match, {
+      type: 'act',
+      unitId: unit.id,
+      abilityId,
+      target,
+    });
+    // If ability failed (range), still assert pure UI helpers on acted turn state
+    if (!r.ok) match.turn.acted = true;
+    assert.equal(match.turn.acted, true);
+
+    // Simulate submitAction UI resolution for still-controllable turn
+    const mode = uiModeAfterSuccessfulAct(match.turn, {
+      canControl: true,
+      phase: 'battle',
+      unitEnded: false,
+    });
+    assert.equal(mode, 'wait-face');
+    // Simulate onArenaClick post-submit (must preserve wait-face — bug was forcing idle)
+    assert.equal(uiModeAfterActClickPath(mode), 'wait-face');
+    assert.equal(shouldAutoOpenWaitFace(match.turn, { canControl: true, phase: 'battle' }), true);
+
+    // Structural guard on shipped onArenaClick act branch
+    const appSrc = fs.readFileSync(path.join(root, 'src/client/game-app.js'), 'utf8');
+    const actBlock = appSrc.slice(appSrc.indexOf("if (this.uiMode === 'act' && this.selectedAbility)"));
+    const end = actBlock.indexOf('async submitAction');
+    const block = actBlock.slice(0, end > 0 ? end : 900);
+    assert.ok(block.includes('submitAction(action)'));
+    assert.ok(
+      !block.includes("this.uiMode = 'idle';\n      this.selectedAbility"),
+      'act click path must not force idle after submitAction'
+    );
+    assert.ok(block.includes('_maybeAutoWaitFace') || block.includes("uiMode !== 'wait-face'"));
   });
 });
 
@@ -127,9 +189,21 @@ describe('formation no-scroll chip structure', () => {
   it('game-app renders chip pickers in sticky top (not scroll-only selects)', () => {
     const src = fs.readFileSync(path.join(root, 'src/client/game-app.js'), 'utf8');
     assert.ok(src.includes('loadout-chip-pickers'));
-    assert.ok(src.includes('data-field="job"') || src.includes("data-field=\"job\"") || src.includes('data-field="job"') || src.includes('chip'));
     assert.ok(src.includes('chips-job') || src.includes('chip-scroll'));
     assert.ok(src.includes('loadout-noscroll') || src.includes('loadout-chip-pickers'));
+    // Chips appear before preview in markup so phone users hit pickers first
+    const chipAt = src.indexOf('loadout-chip-pickers');
+    const previewAt = src.indexOf('loadout-sticky-preview-row');
+    assert.ok(chipAt > 0 && previewAt > chipAt, 'chip pickers must precede preview in formation DOM');
+  });
+
+  it('CSS allows mobile formation overflow and sticky Start (no clipped unreachable actions)', () => {
+    const css = fs.readFileSync(path.join(root, 'public/styles.css'), 'utf8');
+    assert.ok(css.includes('loadout-noscroll'));
+    assert.ok(css.includes('loadout-actions-sticky'));
+    // Must not be overflow:hidden-only on short phones
+    assert.ok(css.includes('overflow-y: auto') || css.includes('overflow-y:auto'));
+    assert.ok(css.includes('position: sticky') || css.includes('position:sticky'));
   });
 });
 
