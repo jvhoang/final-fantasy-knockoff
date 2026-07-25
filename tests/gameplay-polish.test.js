@@ -47,39 +47,43 @@ describe('subjective Ally/Foe labels', () => {
 });
 
 describe('act economy after cast', () => {
-  it('instant act as first action leaves move available (does not end turn)', () => {
+  it('instant act as first action leaves move available and UI stays idle (not wait-face)', async () => {
+    const { uiModeAfterSuccessfulAct, shouldAutoOpenWaitFace, canStillMove } = await import(
+      '../src/client/battle-ui.js'
+    );
     const m = createMatch({ mode: 'ai', mapSeed: 3, playerLoadouts: defaultPlayerLoadouts() });
-    const unit = m.units.find((u) => u.team === 'player' && u.abilities.includes('strike'));
-    assert.ok(unit);
+    // focus is self-range 0 — always legal in-range act
+    const unit = m.units.find((u) => u.team === 'player' && u.abilities.includes('focus'));
+    assert.ok(unit, 'squireling has focus');
     unit.ct = 100;
     m.activeUnitId = unit.id;
     m.phase = 'battle';
     m.turn = { moved: false, acted: false, unitId: unit.id };
-    // Find adjacent foe or tile
-    let target = { x: unit.x + 1, y: unit.y };
-    for (const f of m.units.filter((u) => u.team === 'enemy' && u.alive)) {
-      if (Math.abs(f.x - unit.x) + Math.abs(f.y - unit.y) <= 1) {
-        target = { x: f.x, y: f.y };
-        break;
-      }
-    }
     const r = applyAction(m, {
       type: 'act',
       unitId: unit.id,
-      abilityId: 'strike',
-      target,
+      abilityId: 'focus',
+      target: { x: unit.x, y: unit.y },
     });
-    if (!r.ok) {
-      // force adjacent empty/self for self-buff if strike fails
-      assert.ok(true);
-      return;
-    }
+    assert.equal(r.ok, true, r.error);
     assert.equal(m.turn.acted, true);
     assert.equal(m.turn.moved, false);
-    // Still this unit's turn (not advanced)
     assert.equal(m.activeUnitId, unit.id);
+    assert.equal(canStillMove(m.turn), true);
+    assert.equal(shouldAutoOpenWaitFace(m.turn, { canControl: true, phase: 'battle' }), false);
+    assert.equal(
+      uiModeAfterSuccessfulAct(m.turn, { canControl: true, phase: 'battle', unitEnded: false }),
+      'idle',
+      'Act-first must not force wait-face (Move still available)'
+    );
   });
 
+  it('Act-second (after move) auto-opens wait-face via UI helper', async () => {
+    const { uiModeAfterSuccessfulAct, shouldAutoOpenWaitFace } = await import('../src/client/battle-ui.js');
+    const turn = { moved: true, acted: true };
+    assert.equal(shouldAutoOpenWaitFace(turn, { canControl: true, phase: 'battle' }), true);
+    assert.equal(uiModeAfterSuccessfulAct(turn, { canControl: true, phase: 'battle' }), 'wait-face');
+  });
 });
 
 describe('cast target follow', () => {

@@ -24,7 +24,8 @@ export function isValidTurnFocusZoom(z = TURN_FOCUS_ZOOM) {
 }
 
 /**
- * After Act (and Move optional), only Wait remains → auto-open Wait/Face.
+ * Auto-open Wait/Face only when both Move and Act are done (only Wait left).
+ * Act-first (acted, !moved) must NOT auto-open — player still needs Move.
  * @param {{ moved?: boolean, acted?: boolean }|null|undefined} turn
  * @param {{ canControl?: boolean, phase?: string, busy?: boolean }} [ctx]
  */
@@ -33,8 +34,8 @@ export function shouldAutoOpenWaitFace(turn, ctx = {}) {
   if (ctx.busy) return false;
   if (ctx.phase && ctx.phase !== 'battle') return false;
   if (ctx.canControl === false) return false;
-  // Only Wait left when Act is done (Move may or may not have been used)
-  return !!turn.acted;
+  // Only Wait remains after Move + Act (Act-second / moved already)
+  return !!turn.acted && !!turn.moved;
 }
 
 /**
@@ -53,9 +54,10 @@ export function canStillAct(turn) {
 
 /**
  * UI mode after a successful player Act on the real click→submit path.
- * Must remain 'wait-face' when only Wait remains (never snap back to idle).
+ * - Act-first (moved false): 'idle' so Move stays available
+ * - Act-second (moved true): 'wait-face' auto-open
  *
- * @param {{ acted?: boolean }|null} turn after applyAction
+ * @param {{ acted?: boolean, moved?: boolean }|null} turn after applyAction
  * @param {{ canControl?: boolean, phase?: string, unitEnded?: boolean }} ctx
  * @returns {'wait-face'|'idle'}
  */

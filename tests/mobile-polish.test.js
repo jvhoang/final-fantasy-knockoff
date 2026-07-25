@@ -43,70 +43,61 @@ describe('turn focus zoom band', () => {
 });
 
 describe('auto Wait/Face after Act', () => {
-  it('opens only when acted and controllable', () => {
-    assert.equal(shouldAutoOpenWaitFace({ moved: false, acted: true }, { canControl: true, phase: 'battle' }), true);
+  it('opens only when Act-second (moved && acted), not Act-first', () => {
+    // Act-first: Move still available — do NOT auto-open Wait/Face
+    assert.equal(shouldAutoOpenWaitFace({ moved: false, acted: true }, { canControl: true, phase: 'battle' }), false);
+    assert.equal(
+      uiModeAfterSuccessfulAct({ moved: false, acted: true }, { canControl: true, phase: 'battle' }),
+      'idle'
+    );
+    // Act-second: only Wait left
     assert.equal(shouldAutoOpenWaitFace({ moved: true, acted: true }, { canControl: true, phase: 'battle' }), true);
+    assert.equal(
+      uiModeAfterSuccessfulAct({ moved: true, acted: true }, { canControl: true, phase: 'battle' }),
+      'wait-face'
+    );
     assert.equal(shouldAutoOpenWaitFace({ moved: true, acted: false }, { canControl: true, phase: 'battle' }), false);
-    assert.equal(shouldAutoOpenWaitFace({ moved: false, acted: true }, { canControl: false, phase: 'battle' }), false);
-    assert.equal(shouldAutoOpenWaitFace({ moved: false, acted: true }, { canControl: true, busy: true }), false);
+    assert.equal(shouldAutoOpenWaitFace({ moved: true, acted: true }, { canControl: false, phase: 'battle' }), false);
+    assert.equal(shouldAutoOpenWaitFace({ moved: true, acted: true }, { canControl: true, busy: true }), false);
   });
 
-  it('real act path keeps wait-face through click post-submit (no idle reset)', () => {
-    // Drive real match act so turn.acted is true, then apply shipped UI helpers
+  it('real Act-first stays idle (Move enabled); Act-second opens wait-face', () => {
     const match = createMatch({ mode: 'ai', mapSeed: 11, playerLoadouts: defaultPlayerLoadouts() });
-    const unit = match.units.find((u) => u.team === 'player' && u.alive);
-    assert.ok(unit);
+    const unit = match.units.find((u) => u.team === 'player' && u.abilities.includes('focus'));
+    assert.ok(unit, 'need self-buff focus for guaranteed in-range act');
     unit.ct = 100;
     match.activeUnitId = unit.id;
     match.phase = 'battle';
     match.turn = { moved: false, acted: false, unitId: unit.id };
-    const abilityId = unit.abilities.includes('strike') ? 'strike' : unit.abilities[0];
-    let target = { x: unit.x, y: unit.y };
-    for (const [dx, dy] of [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1],
-    ]) {
-      const x = unit.x + dx;
-      const y = unit.y + dy;
-      if (match.map.tiles[y]?.[x]?.walkable) {
-        target = { x, y };
-        break;
-      }
-    }
+    // Self-target focus (range 0)
     const r = applyAction(match, {
       type: 'act',
       unitId: unit.id,
-      abilityId,
-      target,
+      abilityId: 'focus',
+      target: { x: unit.x, y: unit.y },
     });
-    // If ability failed (range), still assert pure UI helpers on acted turn state
-    if (!r.ok) match.turn.acted = true;
+    assert.equal(r.ok, true, r.error);
     assert.equal(match.turn.acted, true);
+    assert.equal(match.turn.moved, false);
+    assert.equal(match.activeUnitId, unit.id);
 
-    // Simulate submitAction UI resolution for still-controllable turn
-    const mode = uiModeAfterSuccessfulAct(match.turn, {
+    const modeFirst = uiModeAfterSuccessfulAct(match.turn, {
       canControl: true,
       phase: 'battle',
       unitEnded: false,
     });
-    assert.equal(mode, 'wait-face');
-    // Simulate onArenaClick post-submit (must preserve wait-face — bug was forcing idle)
-    assert.equal(uiModeAfterActClickPath(mode), 'wait-face');
-    assert.equal(shouldAutoOpenWaitFace(match.turn, { canControl: true, phase: 'battle' }), true);
+    assert.equal(modeFirst, 'idle', 'Act-first must leave Move available, not wait-face');
+    assert.equal(shouldAutoOpenWaitFace(match.turn, { canControl: true, phase: 'battle' }), false);
 
-    // Structural guard on shipped onArenaClick act branch
-    const appSrc = fs.readFileSync(path.join(root, 'src/client/game-app.js'), 'utf8');
-    const actBlock = appSrc.slice(appSrc.indexOf("if (this.uiMode === 'act' && this.selectedAbility)"));
-    const end = actBlock.indexOf('async submitAction');
-    const block = actBlock.slice(0, end > 0 ? end : 900);
-    assert.ok(block.includes('submitAction(action)'));
-    assert.ok(
-      !block.includes("this.uiMode = 'idle';\n      this.selectedAbility"),
-      'act click path must not force idle after submitAction'
-    );
-    assert.ok(block.includes('_maybeAutoWaitFace') || block.includes("uiMode !== 'wait-face'"));
+    // Simulate already moved then act
+    match.turn = { moved: true, acted: true, unitId: unit.id };
+    const modeSecond = uiModeAfterSuccessfulAct(match.turn, {
+      canControl: true,
+      phase: 'battle',
+      unitEnded: false,
+    });
+    assert.equal(modeSecond, 'wait-face');
+    assert.equal(uiModeAfterActClickPath(modeSecond), 'wait-face');
   });
 });
 
