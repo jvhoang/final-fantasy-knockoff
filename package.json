@@ -1,0 +1,22 @@
+{
+  "name": "final-fantasy-knockoff",
+  "version": "1.0.0",
+  "description": "Final Fantasy Knockoff — FFT-style 4v4 CT tactical arena (web)",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "start": "node src/net/server.js",
+    "serve": "node src/net/server.js",
+    "client-only": "npx --yes serve public -p 5173",
+    "build:pages": "node scripts/build-pages.mjs",
+    "build:pages:root": "node scripts/build-pages.mjs /"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "three": "^0.170.0",
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}

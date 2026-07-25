@@ -1,0 +1,11 @@
+node_modules/
+.tools/
+.DS_Store
+*.log
+.playwright/
+_web.mjs
+_web_launch.mjs
+scripts-web-launch.mjs
+.env
+.idea/
+.vscode/
