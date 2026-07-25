@@ -224,15 +224,29 @@ export class BattlePresentation {
       const spectacle = magicSpectacleFromMp(summon ? Math.max(mpCost, 24) : mpCost);
       const hold = summon ? SUMMON_HOLD_MS : spectacle.holdMs;
       const name = ev.text || ability?.name || this._abilityName(abId) || 'Spell';
+      // Follow charged target unit if they moved (target already resolved in match)
+      let target = ev.target || null;
+      if (ev.targetUnitId && state?.units) {
+        const tu = state.units.find((u) => u.id === ev.targetUnitId && u.alive);
+        if (tu) target = { x: tu.x, y: tu.y };
+      }
       audio.sfx(summon ? 'summon' : 'magic', { intensity: spectacle.intensity });
       this.arena.playAnim(ev.unitId, summon ? 'summon' : 'cast', hold);
-      // Show what is being cast with words
       this.spawnFloater(ev.unitId, name, summon ? '#ffaa44' : '#aaddff');
       this.arena.showCastBanner?.(name, hold);
-      const impactIds = this._aoeImpactUnitIds(state, ev, ability);
-      const fxPlan = planAbilityFx(abId, spectacle, ev.target || null);
-      await this.arena.playAbilityFxPlan(fxPlan, ev.unitId, ev.target, state.map, impactIds);
+      const impactEv = { ...ev, target };
+      const impactIds = this._aoeImpactUnitIds(state, impactEv, ability);
+      const fxPlan = planAbilityFx(abId, spectacle, target || null);
+      await this.arena.playAbilityFxPlan(fxPlan, ev.unitId, target, state.map, impactIds);
       await sleep(hold);
+      return;
+    }
+    if ((ev.kind === 'status' || ev.kind === 'protect') && ev.statusId) {
+      // Persistent aura already via syncStatusAuras; floater has attribute deltas
+      this.spawnFloater(ev.unitId, ev.text || ev.statusId, ev.color || '#aaddff');
+      this.arena.playAnim(ev.unitId, 'cast', SUPPORT_HOLD_MS);
+      this.arena.syncStatusAuras?.(state.units || []);
+      await sleep(SUPPORT_HOLD_MS);
       return;
     }
     if (ev.kind === 'protect') {

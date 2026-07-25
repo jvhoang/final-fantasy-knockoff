@@ -149,11 +149,13 @@ export function endTurn(unit, economy) {
  * @param {string} abilityId
  * @param {{x:number,y:number}} target
  * @param {number} castTime ticks until resolve
+ * @param {string|null} [targetUnitId] follow this unit if they move before resolve
  */
-export function beginCharge(unit, abilityId, target, castTime) {
+export function beginCharge(unit, abilityId, target, castTime, targetUnitId = null) {
   unit.charging = {
     abilityId,
     target: { x: target.x, y: target.y },
+    targetUnitId: targetUnitId || null,
     chargeLeft: castTime,
     castTime,
   };

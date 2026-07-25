@@ -650,6 +650,29 @@ select {
   color: #04201c;
 }
 
+.status-pill {
+  display: inline-block;
+  font-size: 0.65rem;
+  padding: 0.1rem 0.35rem;
+  margin: 0.1rem;
+  border-radius: 4px;
+  background: rgba(62, 207, 191, 0.2);
+  border: 1px solid var(--border);
+  text-transform: capitalize;
+}
+
+.act-confirm-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+}
+
+.act-confirm-row .hint {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
 .action-rail {
   overflow: auto;
 }

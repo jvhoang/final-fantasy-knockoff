@@ -97,6 +97,7 @@ export function inspectUnit(unit, job = null) {
     id: unit.id,
     name: unit.name,
     team: unit.team,
+    // Default label; prefer getUnitInspect(state, id, viewerTeam) for subjective Ally/Foe
     teamLabel: unit.team === 'player' ? 'Ally' : 'Foe',
     jobId: unit.jobId,
     jobName: job?.name || unit.jobId,

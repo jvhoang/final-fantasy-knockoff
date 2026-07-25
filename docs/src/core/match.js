@@ -34,6 +34,8 @@ import { buildParty, defaultPlayerLoadouts, defaultEnemyLoadouts } from './loado
 import { createRandomMap, createMapById } from '../content/map-castle.js';
 import { pushEvent, inspectUnit } from './battle-events.js';
 import { JOBS } from '../content/jobs.js';
+import { resolveChargeTarget, pickTargetUnitIdAt, formatStatusApplyText } from './status-fx.js';
+import { teamLabelForViewer } from './team-label.js';
 
 /**
  * @typedef {{
@@ -148,15 +150,24 @@ export function checkWin(state) {
  * @param {MatchState} state
  */
 function resolveCharge(state, caster, charge) {
+  const resolved = resolveChargeTarget(state, charge);
+  const target = resolved
+    ? { x: resolved.x, y: resolved.y }
+    : charge.target
+      ? { x: charge.target.x, y: charge.target.y }
+      : null;
+  // Keep charge.target in sync for effect application
+  if (target) charge.target = { x: target.x, y: target.y };
   pushEvent(state, {
     kind: 'cast_resolve',
     unitId: caster.id,
     abilityId: charge.abilityId,
-    target: charge.target ? { x: charge.target.x, y: charge.target.y } : null,
+    target,
+    targetUnitId: charge.targetUnitId || resolved?.unitId || null,
     fromCharge: true,
     text: getAbility(charge.abilityId).name,
   });
-  applyAbilityEffect(state, caster, charge.abilityId, charge.target, true);
+  applyAbilityEffect(state, caster, charge.abilityId, target || charge.target, true);
 }
 
 /**
@@ -319,7 +330,8 @@ export function applyAction(state, action) {
     // Calculator: allow CT number override (2–6) instead of only ability default 3
     const castTime = resolveAbilityCastTime(ability, action.ctNumber);
     if (castTime > 0) {
-      beginCharge(unit, action.abilityId, action.target, castTime);
+      const targetUnitId = pickTargetUnitIdAt(state, action.target);
+      beginCharge(unit, action.abilityId, action.target, castTime, targetUnitId);
       state.turn.acted = true;
       state.log.push(`${unit.name} begins casting ${ability.name} (CT ${castTime})...`);
       pushEvent(state, {
@@ -327,6 +339,7 @@ export function applyAction(state, action) {
         unitId: unit.id,
         abilityId: action.abilityId,
         target: { x: action.target.x, y: action.target.y },
+        targetUnitId,
         text: ability.name,
         color: '#66ccff',
         castTime,
@@ -338,8 +351,11 @@ export function applyAction(state, action) {
         presentation: ability.presentation || 'cast',
         castTime,
       };
-      // Charging ends the turn immediately (FFT-like)
-      return finishTurn(state, unit);
+      // If Move already used, end turn; else leave Move + Wait available (Act-first cast)
+      if (state.turn.moved) {
+        return finishTurn(state, unit);
+      }
+      return { ok: true, state, presentation: state.lastPresentation };
     }
 
     // Instant act: emit attacker action BEFORE damage so AI/online playback shows swing
@@ -426,7 +442,8 @@ export function applyAbilityEffect(state, caster, abilityId, target, fromCharge)
     pushEvent(state, {
       kind: 'protect',
       unitId: caster.id,
-      text: 'Protect',
+      statusId: STATUS.PROTECT,
+      text: formatStatusApplyText(STATUS.PROTECT),
       color: '#88aaff',
     });
     return;
@@ -447,7 +464,8 @@ export function applyAbilityEffect(state, caster, abilityId, target, fromCharge)
     pushEvent(state, {
       kind: 'protect',
       unitId: caster.id,
-      text: 'Protect',
+      statusId: STATUS.PROTECT,
+      text: formatStatusApplyText(STATUS.PROTECT),
       color: '#88aaff',
     });
     state.log.push(`${prefix}${caster.name} takes a defensive stance`);
@@ -496,7 +514,13 @@ export function applyAbilityEffect(state, caster, abilityId, target, fromCharge)
     if (u) {
       applyStatus(u, STATUS.HASTE, 4);
       state.log.push(`${prefix}${caster.name} casts Haste on ${u.name}`);
-      pushEvent(state, { kind: 'status', unitId: u.id, text: 'Haste', color: '#ffee88' });
+      pushEvent(state, {
+        kind: 'status',
+        unitId: u.id,
+        statusId: STATUS.HASTE,
+        text: formatStatusApplyText(STATUS.HASTE),
+        color: '#ffee88',
+      });
     }
     return;
   }
@@ -505,7 +529,13 @@ export function applyAbilityEffect(state, caster, abilityId, target, fromCharge)
     if (u) {
       applyStatus(u, STATUS.SLOW, 4);
       state.log.push(`${prefix}${caster.name} casts Slow on ${u.name}`);
-      pushEvent(state, { kind: 'status', unitId: u.id, text: 'Slow', color: '#aaaaff' });
+      pushEvent(state, {
+        kind: 'status',
+        unitId: u.id,
+        statusId: STATUS.SLOW,
+        text: formatStatusApplyText(STATUS.SLOW),
+        color: '#aaaaff',
+      });
     }
     return;
   }
@@ -517,7 +547,8 @@ export function applyAbilityEffect(state, caster, abilityId, target, fromCharge)
       pushEvent(state, {
         kind: 'protect',
         unitId: u.id,
-        text: 'Protect',
+        statusId: STATUS.PROTECT,
+        text: formatStatusApplyText(STATUS.PROTECT),
         color: '#88aaff',
       });
     }
@@ -528,7 +559,13 @@ export function applyAbilityEffect(state, caster, abilityId, target, fromCharge)
     if (u) {
       applyStatus(u, STATUS.SHELL, 4);
       state.log.push(`${prefix}${caster.name} casts Shell on ${u.name}`);
-      pushEvent(state, { kind: 'status', unitId: u.id, text: 'Shell', color: '#cc88ff' });
+      pushEvent(state, {
+        kind: 'status',
+        unitId: u.id,
+        statusId: STATUS.SHELL,
+        text: formatStatusApplyText(STATUS.SHELL),
+        color: '#cc88ff',
+      });
     }
     return;
   }
@@ -585,11 +622,20 @@ export function applyAbilityEffect(state, caster, abilityId, target, fromCharge)
  * @param {MatchState} state
  * @param {string} unitId
  */
-export function getUnitInspect(state, unitId) {
+/**
+ * @param {MatchState} state
+ * @param {string} unitId
+ * @param {string|null} [viewerTeam] local viewer team for Ally/Foe
+ */
+export function getUnitInspect(state, unitId, viewerTeam = null) {
   const u = getUnit(state, unitId);
   if (!u) return null;
-  return inspectUnit(u, JOBS[u.jobId] || null);
+  const data = inspectUnit(u, JOBS[u.jobId] || null);
+  data.teamLabel = teamLabelForViewer(viewerTeam ?? null, u.team);
+  return data;
 }
+
+export { teamLabelForViewer, resolveChargeTarget, pickTargetUnitIdAt, formatStatusApplyText };
 
 /**
  * Serializable snapshot for network.

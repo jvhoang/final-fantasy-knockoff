@@ -282,13 +282,20 @@ export function tickUnitAnim(mesh, anim, dt) {
   mesh.position.y = baseY;
 
   if (anim === 'idle') {
-    // Never leave residual attack yaw
+    // FFT-like march-in-place: bounce + slight body sway (weapon stays sheathed-stable)
     mesh.rotation.y = baseYaw;
+    const step = Math.abs(Math.sin(t * 7.5));
+    mesh.position.y = baseY + step * 0.055;
+    mesh.rotation.z = Math.sin(t * 7.5) * 0.06;
     if (weapon) {
       weapon.rotation.z = 0;
       weapon.rotation.x = 0;
     }
-    mesh.position.y = baseY + Math.sin(t * 2) * 0.02;
+    // Legs pulse via scale on first children if present
+    if (mesh.children?.[0]?.scale && mesh.children?.[1]?.scale) {
+      mesh.children[0].scale.y = 1 + step * 0.08;
+      mesh.children[1].scale.y = 1 + (1 - step) * 0.08;
+    }
   } else if (anim === 'move') {
     mesh.rotation.y = baseYaw;
     mesh.position.y = baseY + Math.abs(Math.sin(t * 10)) * 0.06;

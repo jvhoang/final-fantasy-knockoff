@@ -40,6 +40,7 @@ import {
   uiModeAfterSuccessfulAct,
   shouldShowActionChrome,
 } from './battle-ui.js';
+import { teamLabelForViewer } from '../core/team-label.js';
 import { MSG } from '../net/protocol.js';
 import { MultiplayerClient } from '../net/mp-client.js';
 import { resolveMultiplayerEndpoint } from '../net/ws-config.js';
@@ -75,7 +76,15 @@ export class GameApp {
     this._prevLoadoutStats = null;
     this._lastFocusedTurnId = null;
     this._hoverAoeTile = null;
+    /** Pending act target awaiting confirm button */
+    this._pendingActTarget = null;
     this._buildShell();
+  }
+
+  /** Local viewer team for Ally/Foe labels */
+  _viewerTeam() {
+    if (this.match?.mode === 'online') return this.onlineTeam || TEAMS.PLAYER;
+    return TEAMS.PLAYER;
   }
 
   _buildShell() {
@@ -583,10 +592,11 @@ export class GameApp {
       const ch = active.charging
         ? `<br/><span class="casting">Casting ${escapeHtml(getAbility(active.charging.abilityId).name)}… (${active.charging.chargeLeft}/${active.charging.castTime})</span>`
         : '';
-      turnEl.innerHTML = `<strong>${escapeHtml(active.name)}</strong> (${active.team === 'player' ? 'Ally' : 'Foe'})<br/>HP ${active.hp}/${active.maxHp} · MP ${active.mp}/${active.maxMp} · CT ${active.ct}${ch}`;
+      const lab = teamLabelForViewer(this._viewerTeam(), active.team);
+      turnEl.innerHTML = `<strong>${escapeHtml(active.name)}</strong> (${lab})<br/>HP ${active.hp}/${active.maxHp} · MP ${active.mp}/${active.maxMp} · CT ${active.ct}${ch}`;
       // Active unit + tile highlight always during their turn
       this.arena.setActiveHighlight(active.id, this.match.map, { x: active.x, y: active.y });
-      // Autopan/autorotate so active unit is centered and front-facing (once per turn id)
+      // Autopan onto whoever is acting (ally or foe); free camera still works after
       if (this._lastFocusedTurnId !== active.id && !this.pres?.busy) {
         this._lastFocusedTurnId = active.id;
         void this.arena.focusOnUnit(active.id, {
@@ -756,18 +766,22 @@ export class GameApp {
       el.innerHTML = `<em>Waiting for turn…</em>`;
       return;
     }
-    const data = getUnitInspect(this.match, id);
+    const data = getUnitInspect(this.match, id, this._viewerTeam());
     if (!data) return;
     const unit = getUnit(this.match, id);
     const portrait = portraitIcon(data.jobId, unit?.gender || 'm', data.team);
     const isActive = id === this.match.activeUnitId;
+    const allyFoe = teamLabelForViewer(this._viewerTeam(), data.team);
+    const statusBits = (data.statuses || [])
+      .map((s) => `<span class="status-pill">${escapeHtml(s.id)}</span>`)
+      .join(' ');
     el.innerHTML = `
       <div class="bottom-unit-inner">
         <img class="unit-portrait" src="${portrait}" width="72" height="72" alt="portrait"/>
         <div class="bottom-unit-main">
           <div class="inspect-head">
             <strong>${escapeHtml(data.name)}</strong>
-            <span class="badge ${data.team}">${escapeHtml(data.teamLabel)}</span>
+            <span class="badge ${allyFoe === 'Ally' ? 'player' : 'enemy'}">${escapeHtml(allyFoe)}</span>
             ${isActive ? '<span class="badge active-turn">ACTIVE</span>' : ''}
           </div>
           <div class="inspect-job">${escapeHtml(data.jobName)} · Face ${escapeHtml(data.facing)} ${data.alive ? '' : '· KO'}</div>
@@ -777,6 +791,7 @@ export class GameApp {
             <div>CT <b>${data.ct}</b></div>
             <div>Spd ${data.speed} · Mv ${data.move} · Jmp ${data.jump}</div>
             <div>PA ${data.pa} · MA ${data.ma} · Def ${data.def}</div>
+            ${statusBits ? `<div class="inspect-status">Status: ${statusBits}</div>` : ''}
           </div>
           <div class="inspect-gear row-gear">
             <span><img class="item-icon" src="${itemIconUrl({ id: data.weaponId, icon: data.weaponId })}" width="28" height="28" alt=""/> ${escapeHtml(data.weaponId)}</span>
@@ -836,14 +851,64 @@ export class GameApp {
       btn.onclick = () => {
         this.selectedAbility = btn.dataset.id;
         this.uiMode = 'act';
+        this._pendingActTarget = null;
         audio.sfx('ui');
         this._showAbilityRange(active, this.selectedAbility);
         this._renderMathCtPicker(this.selectedAbility);
-        this.toast(`Target for ${getAbility(this.selectedAbility).name} — hover for AoE`);
-        // Re-mark selected button
+        this._renderConfirmActButton();
+        this.toast(`Select target for ${getAbility(this.selectedAbility).name}, then Confirm`);
         list.querySelectorAll('.ab').forEach((b) => b.classList.toggle('primary', b.dataset.id === this.selectedAbility));
       };
     });
+  }
+
+  /** Confirm control on action chrome after tile preview */
+  _renderConfirmActButton() {
+    const list = this.screens.querySelector('#ability-list');
+    if (!list) return;
+    let row = list.querySelector('#act-confirm-row');
+    if (!row) {
+      row = document.createElement('div');
+      row.id = 'act-confirm-row';
+      row.className = 'act-confirm-row';
+      list.appendChild(row);
+    }
+    const pending = this._pendingActTarget;
+    const abName = this.selectedAbility ? getAbility(this.selectedAbility).name : 'Act';
+    row.innerHTML = pending
+      ? `<button type="button" id="btn-confirm-act" class="btn primary tiny">Confirm ${escapeHtml(abName)} @ (${pending.x},${pending.y})</button>
+         <button type="button" id="btn-cancel-act" class="btn tiny">Cancel</button>`
+      : `<em class="hint">Click a cell to preview, then Confirm</em>`;
+    row.querySelector('#btn-confirm-act')?.addEventListener('click', () => this._confirmPendingAct());
+    row.querySelector('#btn-cancel-act')?.addEventListener('click', () => {
+      this._pendingActTarget = null;
+      this.selectedAbility = null;
+      this.uiMode = 'idle';
+      this.arena.clearRanges();
+      this._renderCommandBar();
+    });
+  }
+
+  async _confirmPendingAct() {
+    const active = getUnit(this.match, this.match.activeUnitId);
+    if (!active || !this.selectedAbility || !this._pendingActTarget) return;
+    const action = {
+      type: 'act',
+      unitId: active.id,
+      abilityId: this.selectedAbility,
+      target: { x: this._pendingActTarget.x, y: this._pendingActTarget.y },
+    };
+    if (isMathAbility(this.selectedAbility)) action.ctNumber = this._mathCtNumber;
+    await this.submitAction(action);
+    this.selectedAbility = null;
+    this._pendingActTarget = null;
+    this._hoverAoeTile = null;
+    this.arena.clearRanges();
+    if (this.uiMode !== 'wait-face') {
+      this.uiMode = 'idle';
+      this._maybeAutoWaitFace();
+    }
+    this._renderCommandBar();
   }
 
   _renderMathCtPicker(abilityId) {
@@ -967,21 +1032,23 @@ export class GameApp {
 
   async onArenaClick(e) {
     if (!this.match || this.match.phase !== 'battle') return;
+    // Allow inspect even while presentation busy? Prefer after anims
     if (this.pres?.busy) return;
     const tile = this.arena.pickTile(e);
     if (!tile) return;
 
-    // Inspect unit on tile if not in action targeting
-    if (this.uiMode === 'idle' || this.uiMode === 'pick-ability') {
-      const u = this.match.units.find((x) => x.alive && x.x === tile.x && x.y === tile.y);
-      if (u) this.openInspect(u.id);
+    // Always allow inspect of any unit (own or foe) when not mid-command targeting commit
+    const unitOnTile = this.match.units.find((x) => x.alive && x.x === tile.x && x.y === tile.y);
+    if (unitOnTile && (this.uiMode === 'idle' || this.uiMode === 'pick-ability' || !this._canControl(getUnit(this.match, this.match.activeUnitId)))) {
+      this.openInspect(unitOnTile.id);
+      // Off-turn: only inspect, no commands
+      if (!this._canControl(getUnit(this.match, this.match.activeUnitId))) return;
     }
 
     const active = getUnit(this.match, this.match.activeUnitId);
     if (!active || !this._canControl(active)) return;
 
     if (this.uiMode === 'wait-face') {
-      // Click relative facing toward tile
       const dx = tile.x - active.x;
       const dy = tile.y - active.y;
       if (dx === 0 && dy === 0) return;
@@ -997,28 +1064,19 @@ export class GameApp {
       await this.submitAction({ type: 'move', unitId: active.id, x: tile.x, y: tile.y });
       this.uiMode = 'idle';
       this.arena.clearRanges();
+      this._maybeAutoWaitFace();
+      this._renderCommandBar();
       return;
     }
     if (this.uiMode === 'act' && this.selectedAbility) {
-      // Confirm with range+AoE still shown
+      // First click: preview only — require Confirm on action chrome
+      if (unitOnTile) this.openInspect(unitOnTile.id);
+      this._pendingActTarget = { x: tile.x, y: tile.y };
       this._showAbilityRange(active, this.selectedAbility, tile);
-      const action = {
-        type: 'act',
-        unitId: active.id,
-        abilityId: this.selectedAbility,
-        target: { x: tile.x, y: tile.y },
-      };
-      if (isMathAbility(this.selectedAbility)) {
-        action.ctNumber = this._mathCtNumber;
-      }
-      await this.submitAction(action);
-      // submitAction sets uiMode='wait-face' when Act leaves only Wait — never force idle here
-      this.selectedAbility = null;
-      this._hoverAoeTile = null;
-      this.arena.clearRanges();
-      if (this.uiMode !== 'wait-face') {
-        this._maybeAutoWaitFace();
-      }
+      this._renderConfirmActButton();
+      this._syncActionChromeVisibility();
+      audio.sfx('select');
+      this.toast('Preview set — press Confirm to cast/attack');
     }
   }
 
@@ -1058,7 +1116,7 @@ export class GameApp {
       }
     }
 
-    // If we just acted and still control this unit, open Wait/Face immediately
+    // After act: auto Wait/Face if only Wait left; else stay idle for residual Move
     if (action.type === 'act') {
       const active = getUnit(this.match, this.match.activeUnitId);
       const canControl = !!(active && this._canControl(active) && this.match.phase === 'battle');
@@ -1067,6 +1125,9 @@ export class GameApp {
         phase: this.match.phase,
         unitEnded: !active || this.match.activeUnitId !== action.unitId,
       });
+    } else if (action.type === 'move') {
+      // After move, if already acted, auto Wait/Face
+      this._maybeAutoWaitFace();
     }
 
     this.refreshBattle();

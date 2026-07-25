@@ -3,6 +3,8 @@
  */
 import * as THREE from 'three';
 import { buildUnitMesh, tickUnitAnim, setUnitFacing, resetUnitAnimPose } from './unit-mesh.js';
+import { tileDecorPlan, seedUnit } from '../content/tile-variants.js';
+import { statusAuraStyle } from '../core/status-fx.js';
 
 /**
  * Durable click-suppression for camera gestures (survives pointerup before click).
@@ -41,6 +43,11 @@ const TERRAIN = {
   tower: { color: 0x7a6a5a, roughness: 0.8, metal: 0.12 },
   void: { color: 0x111111, roughness: 1, metal: 0 },
 };
+
+/** Grass shade variants */
+const GRASS_SHADES = [0x4a6b3a, 0x5a7a4a, 0x6a8b55, 0x3d5c32, 0x708f5e, 0x556b42];
+const WATER_SHADES = [0x1a4a7a, 0x1e5a8a, 0x2468a0, 0x163d66, 0x2a7ab0];
+const STONE_SHADES = [0x6b6560, 0x7a756c, 0x5c5850, 0x8a847a, 0x4a4640];
 
 export class ArenaRenderer {
   /**
@@ -406,6 +413,63 @@ export class ArenaRenderer {
     await this.focusOnUnit(firstUnitId, { facing, zoom: 5.5, ms: Math.floor(ms * 0.5) });
   }
 
+  /** Stone wall cracks / moss accents */
+  _addStoneDetail(mesh, height, decor) {
+    for (let i = 0; i < (decor.cracks || 0); i++) {
+      const crack = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.03, 0.04),
+        new THREE.MeshStandardMaterial({ color: 0x3a3834 })
+      );
+      crack.position.set(
+        (seedUnit(decor.seed, 100 + i) - 0.5) * 0.4,
+        (seedUnit(decor.seed, 110 + i) - 0.3) * height * 0.4,
+        0.48
+      );
+      mesh.add(crack);
+    }
+    if (decor.moss) {
+      const moss = new THREE.Mesh(
+        new THREE.SphereGeometry(0.08, 6, 6),
+        new THREE.MeshStandardMaterial({ color: 0x3d6b2f, roughness: 1 })
+      );
+      moss.position.set(0.3, -height * 0.2, 0.4);
+      mesh.add(moss);
+    }
+  }
+
+  /**
+   * Status auras on living units (Protect/Haste/Slow rings).
+   * @param {import('../core/ct.js').Unit[]} units
+   */
+  syncStatusAuras(units) {
+    for (const u of units || []) {
+      const mesh = this.unitMeshes.get(u.id);
+      if (!mesh || mesh.userData.ashed) continue;
+      // Remove old aura rings
+      const old = mesh.children.filter((c) => c.name === 'statusAura');
+      for (const o of old) mesh.remove(o);
+      if (!u.alive || !u.statuses?.length) continue;
+      let i = 0;
+      for (const st of u.statuses) {
+        const style = statusAuraStyle(st.id);
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(0.28 + i * 0.06, 0.025, 6, 20),
+          new THREE.MeshBasicMaterial({
+            color: style.color,
+            transparent: true,
+            opacity: 0.65,
+          })
+        );
+        ring.name = 'statusAura';
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.05 + i * 0.04;
+        ring.userData.statusId = st.id;
+        mesh.add(ring);
+        i += 1;
+      }
+    }
+  }
+
   /**
    * Highlight active unit mesh + tile underfoot.
    * @param {string|null} unitId
@@ -509,6 +573,7 @@ export class ArenaRenderer {
       for (let x = 0; x < map.width; x++) {
         const t = map.tiles[y][x];
         const conf = TERRAIN[t.terrain] || TERRAIN.floor;
+        const decor = tileDecorPlan(t.terrain, x, y);
         const h =
           t.terrain === 'water'
             ? 0.12 + (t.depth || 1) * 0.04
@@ -516,62 +581,132 @@ export class ArenaRenderer {
 
         let mesh;
         if (t.terrain === 'water') {
+          const wc = WATER_SHADES[decor.variant % WATER_SHADES.length];
           mesh = new THREE.Mesh(
             new THREE.BoxGeometry(cell * 0.98, h, cell * 0.98),
             new THREE.MeshPhysicalMaterial({
-              color: conf.color,
-              roughness: 0.15,
-              metalness: 0.2,
-              transmission: 0.35,
+              color: wc,
+              roughness: 0.12 + seedUnit(decor.seed, 7) * 0.15,
+              metalness: 0.15 + seedUnit(decor.seed, 8) * 0.15,
+              transmission: 0.3 + seedUnit(decor.seed, 9) * 0.15,
               thickness: 0.5,
               transparent: true,
-              opacity: 0.82,
+              opacity: 0.75 + seedUnit(decor.seed, 10) * 0.15,
             })
           );
+          // Ripple discs
+          for (let r = 0; r < decor.ripples; r++) {
+            const rip = new THREE.Mesh(
+              new THREE.RingGeometry(0.08 + r * 0.06, 0.12 + r * 0.06, 12),
+              new THREE.MeshBasicMaterial({
+                color: 0xaaddff,
+                transparent: true,
+                opacity: 0.2,
+                side: THREE.DoubleSide,
+              })
+            );
+            rip.rotation.x = -Math.PI / 2;
+            rip.position.set(
+              (seedUnit(decor.seed, 20 + r) - 0.5) * 0.4,
+              h / 2 + 0.02,
+              (seedUnit(decor.seed, 30 + r) - 0.5) * 0.4
+            );
+            mesh.add(rip);
+          }
         } else if (t.terrain === 'wall') {
+          const sc = STONE_SHADES[decor.variant % STONE_SHADES.length];
           mesh = new THREE.Mesh(
             new THREE.BoxGeometry(cell * 0.98, h * 1.4, cell * 0.98),
             new THREE.MeshStandardMaterial({
-              color: conf.color,
+              color: sc,
               roughness: conf.roughness,
               metalness: conf.metal,
             })
           );
+          this._addStoneDetail(mesh, h * 1.4, decor);
         } else if (t.terrain === 'bridge') {
           mesh = new THREE.Mesh(
             new THREE.BoxGeometry(cell * 0.92, 0.18, cell * 0.92),
             new THREE.MeshStandardMaterial({
               color: conf.color,
-              roughness: conf.roughness,
+              roughness: conf.roughness * decor.shade,
               metalness: conf.metal,
             })
           );
-          // posts
           const post = new THREE.Mesh(
             new THREE.CylinderGeometry(0.04, 0.05, 0.5, 6),
             new THREE.MeshStandardMaterial({ color: 0x5c4033 })
           );
           post.position.set(-0.35, -0.1, -0.35);
           mesh.add(post);
+          if (decor.cracks) {
+            const plank = new THREE.Mesh(
+              new THREE.BoxGeometry(0.7, 0.02, 0.08),
+              new THREE.MeshStandardMaterial({ color: 0x6b4423 })
+            );
+            plank.position.y = 0.1;
+            mesh.add(plank);
+          }
         } else if (t.terrain === 'tower') {
           mesh = new THREE.Mesh(
             new THREE.CylinderGeometry(0.4, 0.48, h, 8),
             new THREE.MeshStandardMaterial({
-              color: conf.color,
+              color: STONE_SHADES[decor.variant % STONE_SHADES.length],
               roughness: conf.roughness,
               metalness: conf.metal,
             })
           );
         } else {
+          // Grass / elevated / ramp with multi-shade + rocks + clumps
+          const gc = GRASS_SHADES[decor.variant % GRASS_SHADES.length];
+          const c = new THREE.Color(gc);
+          c.multiplyScalar(decor.shade);
           mesh = new THREE.Mesh(
             new THREE.BoxGeometry(cell * 0.96, h, cell * 0.96),
             new THREE.MeshStandardMaterial({
-              color: conf.color,
+              color: c,
               roughness: conf.roughness,
               metalness: conf.metal,
             })
           );
-          // top edge highlight for elevation readability
+          // Shadow patch
+          const shadow = new THREE.Mesh(
+            new THREE.CircleGeometry(0.15 + seedUnit(decor.seed, 11) * 0.2, 8),
+            new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.12 + seedUnit(decor.seed, 12) * 0.1 })
+          );
+          shadow.rotation.x = -Math.PI / 2;
+          shadow.position.set(
+            (seedUnit(decor.seed, 13) - 0.5) * 0.35,
+            h / 2 + 0.015,
+            (seedUnit(decor.seed, 14) - 0.5) * 0.35
+          );
+          mesh.add(shadow);
+          // Grass clumps
+          for (let i = 0; i < decor.clumps; i++) {
+            const clump = new THREE.Mesh(
+              new THREE.ConeGeometry(0.04 + seedUnit(decor.seed, 40 + i) * 0.03, 0.08, 4),
+              new THREE.MeshStandardMaterial({ color: GRASS_SHADES[(decor.variant + i + 1) % GRASS_SHADES.length] })
+            );
+            clump.position.set(
+              (seedUnit(decor.seed, 50 + i) - 0.5) * 0.55,
+              h / 2 + 0.04,
+              (seedUnit(decor.seed, 60 + i) - 0.5) * 0.55
+            );
+            mesh.add(clump);
+          }
+          // Rocks
+          for (let i = 0; i < decor.rocks; i++) {
+            const rock = new THREE.Mesh(
+              new THREE.DodecahedronGeometry(0.05 + seedUnit(decor.seed, 70 + i) * 0.04, 0),
+              new THREE.MeshStandardMaterial({ color: 0x6a655c, roughness: 0.9 })
+            );
+            rock.position.set(
+              (seedUnit(decor.seed, 80 + i) - 0.5) * 0.5,
+              h / 2 + 0.03,
+              (seedUnit(decor.seed, 90 + i) - 0.5) * 0.5
+            );
+            mesh.add(rock);
+          }
           if (t.height >= 1 && t.walkable) {
             const lip = new THREE.Mesh(
               new THREE.BoxGeometry(cell * 0.96, 0.03, cell * 0.96),
@@ -585,7 +720,7 @@ export class ArenaRenderer {
         mesh.position.set(x * cell, h / 2, y * cell);
         mesh.receiveShadow = true;
         mesh.castShadow = t.terrain === 'wall' || t.terrain === 'tower' || t.height >= 2;
-        mesh.userData = { x, y, tile: t };
+        mesh.userData = { x, y, tile: t, decor };
         this.mapGroup.add(mesh);
         this.tileMeshes.set(`${x},${y}`, mesh);
 
@@ -681,6 +816,7 @@ export class ArenaRenderer {
         this.unitAnims.delete(id);
       }
     }
+    this.syncStatusAuras(units);
   }
 
   /**
