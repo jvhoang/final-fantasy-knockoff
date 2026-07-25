@@ -36,6 +36,8 @@ import { WALK_MS_PER_STEP, BATTLE_INTRO_MS } from './presentation-timing.js';
 import { audio } from './audio.js';
 import { TURN_FOCUS_ZOOM, shouldAutoOpenWaitFace, uiModeAfterSuccessfulAct } from './battle-ui.js';
 import { MSG } from '../net/protocol.js';
+import { MultiplayerClient } from '../net/mp-client.js';
+import { resolveMultiplayerEndpoint } from '../net/ws-config.js';
 import { buildUnitMesh } from './unit-mesh.js';
 import * as THREE from 'three';
 
@@ -55,9 +57,12 @@ export class GameApp {
     this.pres = null;
     this.difficulty = 'normal';
     this.ws = null;
+    /** @type {MultiplayerClient|null} */
+    this.mp = null;
     this.clientId = null;
     this.room = null;
     this.onlineTeam = 'player';
+    this._mpTransport = null;
     this.inspectId = null;
     this._waitFacing = 'N';
     this._mathCtNumber = 3;
@@ -1010,8 +1015,12 @@ export class GameApp {
   }
 
   async submitAction(action) {
-    if (this.match.mode === 'online' && this.ws?.readyState === 1) {
-      this.ws.send(JSON.stringify({ type: MSG.ACTION, action }));
+    if (this.match.mode === 'online' && this.mp) {
+      try {
+        this.mp.send({ type: MSG.ACTION, action });
+      } catch (e) {
+        this.toast(String(e.message || e) || 'Multiplayer send failed');
+      }
       return;
     }
     // Serialize actions while presentation is busy — prevent stacked skip/teleport
@@ -1054,47 +1063,72 @@ export class GameApp {
     this.refreshBattle();
   }
 
-  /* Online — simplified */
+  /* Online — WebSocket (npm start) or P2P (GitHub Pages) */
   showOnline() {
     this.mode = 'online';
+    const ep = resolveMultiplayerEndpoint();
+    const modeHint =
+      ep.mode === 'pages'
+        ? 'Browser P2P mode (works on GitHub Pages). Share the room code with a friend on another device.'
+        : ep.mode === 'custom'
+          ? `Custom server: ${escapeHtml(ep.url || '')}`
+          : 'Connecting to game server on this host (npm start).';
     this.screens.innerHTML = `
       <section class="panel fft-panel">
-        <h2>Online</h2>
+        <h2>Online Multiplayer</h2>
+        <p class="hint" id="on-mode-hint">${modeHint}</p>
         <label>Name <input id="on-name" value="Tactician"/></label>
         <button type="button" id="on-create" class="btn primary">Create Room</button>
-        <label>Code <input id="on-code" maxlength="6"/></label>
-        <button type="button" id="on-join" class="btn">Join</button>
+        <label>Code <input id="on-code" maxlength="8" placeholder="ABC123" autocomplete="off"/></label>
+        <button type="button" id="on-join" class="btn">Join Room</button>
+        <p class="hint">Optional: set custom server with <code>?ws=wss://your-host</code> or localStorage <code>ffk_ws_url</code>.</p>
         <button type="button" id="on-back" class="btn">Back</button>
+        <p class="hint" id="on-status"></p>
       </section>`;
     this.screens.querySelector('#on-create').onclick = () => this.onlineCreate();
     this.screens.querySelector('#on-join').onclick = () => this.onlineJoin();
-    this.screens.querySelector('#on-back').onclick = () => this.showMenu();
+    this.screens.querySelector('#on-back').onclick = () => {
+      this.mp?.close();
+      this.mp = null;
+      this.showMenu();
+    };
   }
 
-  _wsUrl() {
-    return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
+  _setOnlineStatus(text) {
+    const el = this.screens.querySelector('#on-status');
+    if (el) el.textContent = text || '';
   }
 
-  connectWs() {
-    return new Promise((resolve, reject) => {
-      if (this.ws?.readyState === 1) return resolve(this.ws);
-      const ws = new WebSocket(this._wsUrl());
-      ws.onopen = () => {
-        this.ws = ws;
-        resolve(ws);
-      };
-      ws.onerror = reject;
-      ws.onmessage = (ev) => this.onWsMessage(JSON.parse(ev.data));
+  _ensureMpClient() {
+    if (this.mp && !this.mp._destroyed) return this.mp;
+    this.mp = new MultiplayerClient({
+      onMessage: (msg) => {
+        void this.onWsMessage(msg);
+      },
+      onStatus: (s) => {
+        const map = {
+          'p2p-loading': 'Loading peer network…',
+          'p2p-host-open': 'Room open — waiting for opponent…',
+          'p2p-guest-connected': 'Opponent connected',
+          'p2p-connected': 'Connected to host',
+          'ws-open': 'Connected to server',
+          'ws-close': 'Disconnected',
+        };
+        this._setOnlineStatus(map[s] || s);
+      },
     });
+    return this.mp;
   }
 
   async onWsMessage(msg) {
     if (msg.type === 'welcome') {
       this.clientId = msg.clientId;
+      if (msg.transport) this._mpTransport = msg.transport;
       return;
     }
     if (msg.type === MSG.ERROR) {
       this.toast(msg.error);
+      this._setOnlineStatus(msg.error);
       return;
     }
     if (msg.room) {
@@ -1109,13 +1143,11 @@ export class GameApp {
           this.mode = 'battle';
           audio.startBgm();
           this.renderBattle();
-          // Fresh battle: play all events so far (includes walks)
           if (this.pres) {
             this.pres.resetEvents({ events: [] });
             await this.pres.playEventsSinceCursor(this.match, WALK_MS_PER_STEP);
           }
         } else if (this.pres) {
-          // Same match update: walk multi-tile moves (do not use consumeEvents — skips paths)
           if (this.match.id === prevMatchId) {
             this.pres._eventCursor = Math.min(prevEventLen, this.match.events?.length || 0);
           } else {
@@ -1129,45 +1161,97 @@ export class GameApp {
   }
 
   async onlineCreate() {
+    const name = this.screens.querySelector('#on-name')?.value || 'Host';
+    const btn = this.screens.querySelector('#on-create');
+    if (btn) btn.disabled = true;
+    this._setOnlineStatus('Creating room…');
     try {
-      await this.connectWs();
-      this.ws.send(JSON.stringify({ type: MSG.CREATE_ROOM, name: this.screens.querySelector('#on-name')?.value || 'Host' }));
-    } catch {
-      this.toast('WS failed');
+      this.mp?.close();
+      const mp = this._ensureMpClient();
+      const info = await mp.createRoom(name);
+      this._mpTransport = info.transport;
+      if (info.code) {
+        this._setOnlineStatus(`Room ${info.code} (${info.transport}) — share this code`);
+      } else {
+        this._setOnlineStatus(`Connected (${info.transport})`);
+      }
+    } catch (e) {
+      console.error(e);
+      this.toast(String(e?.message || e) || 'Multiplayer failed');
+      this._setOnlineStatus(String(e?.message || e));
+      this.mp?.close();
+      this.mp = null;
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
+
   async onlineJoin() {
+    const name = this.screens.querySelector('#on-name')?.value || 'Guest';
+    const code = (this.screens.querySelector('#on-code')?.value || '').trim().toUpperCase();
+    if (!code) {
+      this.toast('Enter a room code');
+      return;
+    }
+    const btn = this.screens.querySelector('#on-join');
+    if (btn) btn.disabled = true;
+    this._setOnlineStatus(`Joining ${code}…`);
     try {
-      await this.connectWs();
-      this.ws.send(
-        JSON.stringify({
-          type: MSG.JOIN_ROOM,
-          code: this.screens.querySelector('#on-code')?.value || '',
-          name: this.screens.querySelector('#on-name')?.value || 'Guest',
-        })
-      );
-    } catch {
-      this.toast('WS failed');
+      this.mp?.close();
+      const mp = this._ensureMpClient();
+      await mp.joinRoom(code, name);
+      this._setOnlineStatus(`Joined ${code}`);
+    } catch (e) {
+      console.error(e);
+      this.toast(String(e?.message || e) || 'Join failed');
+      this._setOnlineStatus(String(e?.message || e));
+      this.mp?.close();
+      this.mp = null;
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
 
   renderOnlineLobby() {
     if (!this.room) return;
+    const transport = this._mpTransport || this.mp?.transport || 'online';
     this.screens.innerHTML = `
       <section class="panel fft-panel">
         <h2>Room ${escapeHtml(this.room.code)}</h2>
-        <ul>${this.room.seats.map((s) => `<li>${escapeHtml(s.name)} (${s.team}) ${s.ready ? '✓' : '…'}</li>`).join('')}</ul>
+        <p class="hint">Transport: ${escapeHtml(transport)} · Share code <strong>${escapeHtml(this.room.code)}</strong></p>
+        <ul>${this.room.seats.map((s) => `<li>${escapeHtml(s.name || '…')} (${s.team}) ${s.ready ? '✓ ready' : '…'} ${s.hasLoadout ? '· loadout' : ''}</li>`).join('')}</ul>
         <button type="button" id="ol-loadout" class="btn">Push loadout</button>
         <button type="button" id="ol-ready" class="btn primary">Ready</button>
         <button type="button" id="ol-start" class="btn">Start</button>
         <button type="button" id="ol-back" class="btn">Leave</button>
+        <p class="hint" id="on-status"></p>
       </section>`;
-    this.screens.querySelector('#ol-loadout').onclick = () =>
-      this.ws.send(JSON.stringify({ type: MSG.SET_LOADOUT, loadouts: this.loadouts }));
-    this.screens.querySelector('#ol-ready').onclick = () => this.ws.send(JSON.stringify({ type: MSG.READY, ready: true }));
-    this.screens.querySelector('#ol-start').onclick = () => this.ws.send(JSON.stringify({ type: MSG.START }));
+    this.screens.querySelector('#ol-loadout').onclick = () => {
+      try {
+        this.mp?.send({ type: MSG.SET_LOADOUT, loadouts: this.loadouts });
+        this.toast('Loadout pushed');
+      } catch (e) {
+        this.toast(String(e.message || e));
+      }
+    };
+    this.screens.querySelector('#ol-ready').onclick = () => {
+      try {
+        this.mp?.send({ type: MSG.READY, ready: true });
+      } catch (e) {
+        this.toast(String(e.message || e));
+      }
+    };
+    this.screens.querySelector('#ol-start').onclick = () => {
+      try {
+        this.mp?.send({ type: MSG.START });
+      } catch (e) {
+        this.toast(String(e.message || e));
+      }
+    };
     this.screens.querySelector('#ol-back').onclick = () => {
-      this.ws?.close();
+      this.mp?.close();
+      this.mp = null;
+      this.room = null;
       this.showMenu();
     };
   }

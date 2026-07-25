@@ -24,12 +24,19 @@ export class RoomManager {
   /**
    * @param {string} clientId
    * @param {string} [name]
+   * @param {string} [preferredCode] force room code (P2P peer id mapping)
    */
-  create(clientId, name) {
+  create(clientId, name, preferredCode) {
     const room = createRoom(clientId, name);
-    // ensure unique code
-    while (this.rooms.has(room.code)) {
-      room.code = createRoom(clientId, name).code;
+    if (preferredCode) {
+      room.code = String(preferredCode).toUpperCase();
+      if (this.rooms.has(room.code)) {
+        return { ok: false, error: 'Room code already in use' };
+      }
+    } else {
+      while (this.rooms.has(room.code)) {
+        room.code = createRoom(clientId, name).code;
+      }
     }
     this.rooms.set(room.code, room);
     this.clientRoom.set(clientId, room.code);
