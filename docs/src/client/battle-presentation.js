@@ -262,31 +262,64 @@ export class BattlePresentation {
   }
 
   /**
-   * Sequential playback with slow defaults. Queued so concurrent calls never drop walks.
+   * Wait until all queued presentation finishes (busy depth 0).
+   */
+  waitUntilIdle() {
+    if (!this.busy && this._busyDepth === 0) {
+      return this._playTail.catch(() => {});
+    }
+    return this._playTail.catch(() => {});
+  }
+
+  /**
+   * Sequential playback. Claims event range immediately so concurrent callers
+   * never both slice the same events (late-game teleport root cause).
    * @param {import('../core/match.js').MatchState} state
    * @param {number} [walkMs]
    */
   playEventsSinceCursor(state, walkMs = WALK_MS_PER_STEP) {
+    const list = state.events || [];
+    // Clamp if match was replaced with fewer events
+    if (this._eventCursor > list.length) this._eventCursor = 0;
+    const from = this._eventCursor;
+    const to = list.length;
+    // Claim immediately at schedule time (before async gap)
+    this._eventCursor = to;
+    const fresh = list.slice(from, to);
+
     const run = async () => {
-      const list = state.events || [];
-      // Clamp cursor if state was replaced with fewer events
-      if (this._eventCursor > list.length) this._eventCursor = 0;
-      const fresh = list.slice(this._eventCursor);
-      this._eventCursor = list.length;
+      if (!fresh.length) return;
       this._enterBusy();
+      this.onBusyChange?.(true);
       try {
         for (const ev of fresh) {
+          // Always pass live state for unit positions, but play the claimed event snapshot
           await this.playOneEvent(ev, state, walkMs);
           await sleep(EVENT_GAP_MS);
         }
       } finally {
         this._leaveBusy();
+        this.onBusyChange?.(this.busy);
       }
     };
-    // Chain onto prior playback — late-game teleports often came from overlapping play
+    // Chain onto prior playback — never run two slices in parallel
     const next = this._playTail.then(run, run);
-    this._playTail = next.catch(() => {});
+    this._playTail = next.catch((err) => {
+      if (err) console.error('[presentation]', err);
+    });
     return next;
+  }
+
+  /**
+   * Pure helper for tests: which events a claim would play.
+   * @param {object[]} events
+   * @param {number} cursor
+   */
+  static claimEventSlice(events, cursor) {
+    const list = events || [];
+    const from = Math.min(Math.max(0, cursor), list.length);
+    const to = list.length;
+    return { from, to, fresh: list.slice(from, to), nextCursor: to };
   }
 
   /**

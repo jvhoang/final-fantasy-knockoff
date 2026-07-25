@@ -79,3 +79,23 @@ export function uiModeAfterActClickPath(uiModeAfterSubmit) {
   // Correct path preserves submitAction's wait-face.
   return uiModeAfterSubmit;
 }
+
+/**
+ * Whether the stationary action chrome should be visible.
+ * Hidden during presentation playback; shown only when local player must act.
+ *
+ * @param {{
+ *   busy?: boolean,
+ *   canControl?: boolean,
+ *   phase?: string,
+ *   uiMode?: string,
+ * }} ctx
+ */
+export function shouldShowActionChrome(ctx = {}) {
+  if (ctx.busy) return false;
+  if (ctx.phase && ctx.phase !== 'battle') return false;
+  if (ctx.canControl === false) return false;
+  if (!ctx.canControl) return false;
+  // Controllable turn and not mid-anim → show Move/Ability/Wait (+ Wait/Face)
+  return true;
+}

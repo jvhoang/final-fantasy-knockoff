@@ -34,7 +34,12 @@ import { ArenaRenderer } from './arena.js';
 import { BattlePresentation } from './battle-presentation.js';
 import { WALK_MS_PER_STEP, BATTLE_INTRO_MS } from './presentation-timing.js';
 import { audio } from './audio.js';
-import { TURN_FOCUS_ZOOM, shouldAutoOpenWaitFace, uiModeAfterSuccessfulAct } from './battle-ui.js';
+import {
+  TURN_FOCUS_ZOOM,
+  shouldAutoOpenWaitFace,
+  uiModeAfterSuccessfulAct,
+  shouldShowActionChrome,
+} from './battle-ui.js';
 import { MSG } from '../net/protocol.js';
 import { MultiplayerClient } from '../net/mp-client.js';
 import { resolveMultiplayerEndpoint } from '../net/ws-config.js';
@@ -155,13 +160,7 @@ export class GameApp {
       )
       .join('');
 
-    // Chip pickers stay in sticky header — no scroll needed for job/equip
-    const jobChips = Object.values(JOBS)
-      .map(
-        (j) =>
-          `<button type="button" class="chip ${j.id === slot.jobId ? 'active' : ''}" data-field="job" data-id="${j.id}">${escapeHtml(j.name)}</button>`
-      )
-      .join('');
+    // Gear chip pickers stay in sticky header (Job is meta select above)
     const wepChips = opts.weapons
       .map(
         (w) =>
@@ -199,12 +198,24 @@ export class GameApp {
               })
               .join('')}
           </div>
-          <!-- Chips first: primary picks reachable without scrolling past tall preview -->
+          <!-- Meta row: Name / Gender / Job / 2nd — Job like Secondary (not gear chips) -->
+          <div class="chip-row meta-row loadout-meta-row" id="loadout-meta-row">
+            <label class="inline-field">Name <input id="lo-name" value="${escapeHtml(slot.name)}" /></label>
+            <label class="inline-field">Gender
+              <select id="lo-gender">
+                <option value="m" ${slot.gender !== 'f' ? 'selected' : ''}>M</option>
+                <option value="f" ${slot.gender === 'f' ? 'selected' : ''}>F</option>
+              </select>
+            </label>
+            <label class="inline-field">Job
+              <select id="lo-job">${jobOpts}</select>
+            </label>
+            <label class="inline-field">2nd
+              <select id="lo-sec">${secOpts}</select>
+            </label>
+          </div>
+          <!-- Gear chips only: Weapon / Armor / Acc -->
           <div class="loadout-chip-pickers" id="loadout-chip-pickers">
-            <div class="chip-row">
-              <span class="chip-label">Job</span>
-              <div class="chip-scroll" id="chips-job">${jobChips}</div>
-            </div>
             <div class="chip-row">
               <span class="chip-label">Weapon</span>
               <div class="chip-scroll" id="chips-wep">${wepChips}</div>
@@ -217,20 +228,7 @@ export class GameApp {
               <span class="chip-label">Acc</span>
               <div class="chip-scroll" id="chips-acc">${accChips}</div>
             </div>
-            <div class="chip-row meta-row">
-              <label class="inline-field">Name <input id="lo-name" value="${escapeHtml(slot.name)}" /></label>
-              <label class="inline-field">Gender
-                <select id="lo-gender">
-                  <option value="m" ${slot.gender !== 'f' ? 'selected' : ''}>M</option>
-                  <option value="f" ${slot.gender === 'f' ? 'selected' : ''}>F</option>
-                </select>
-              </label>
-              <label class="inline-field">2nd
-                <select id="lo-sec">${secOpts}</select>
-              </label>
-            </div>
-            <!-- Hidden selects kept for _commitLoadoutForm compatibility -->
-            <select id="lo-job" class="sr-only" aria-hidden="true">${jobOpts}</select>
+            <!-- Hidden selects kept for chip → select wiring -->
             <select id="lo-wep" class="sr-only" aria-hidden="true">${wOpts}</select>
             <select id="lo-arm" class="sr-only" aria-hidden="true">${aOpts}</select>
             <select id="lo-acc" class="sr-only" aria-hidden="true">${xOpts}</select>
@@ -299,12 +297,12 @@ export class GameApp {
     ['lo-job', 'lo-sec', 'lo-wep', 'lo-arm', 'lo-acc', 'lo-gender'].forEach((id) => {
       this.screens.querySelector('#' + id)?.addEventListener('change', refresh);
     });
-    // Chip pickers — primary formation UI without scrolling
+    // Gear chip pickers (weapon/armor/acc only — Job is meta select)
     this.screens.querySelectorAll('.chip[data-field]').forEach((btn) => {
       btn.onclick = () => {
         const field = btn.getAttribute('data-field');
         const id = btn.getAttribute('data-id');
-        const map = { job: 'lo-job', wep: 'lo-wep', arm: 'lo-arm', acc: 'lo-acc' };
+        const map = { wep: 'lo-wep', arm: 'lo-arm', acc: 'lo-acc' };
         const sel = this.screens.querySelector('#' + map[field]);
         if (sel) {
           sel.value = id;
@@ -422,11 +420,9 @@ export class GameApp {
     await this._playBattleBeginsIntro();
     // Snapshot units at spawn positions, then AI may move — walk those paths
     this.pres?.resetEvents(this.match);
-    const ev0 = this.match.events?.length || 0;
     playEnemyTurns(this.match, this.difficulty);
-    // Interleaved walks + cast resolve floaters/VFX (no teleport)
+    // Sequential walks + cast resolve (cursor claimed inside playEventsSinceCursor)
     if (this.pres) {
-      this.pres._eventCursor = ev0;
       await this.pres.playEventsSinceCursor(this.match, WALK_MS_PER_STEP);
     }
     this.refreshBattle();
@@ -512,6 +508,7 @@ export class GameApp {
     const floatLayer = this.screens.querySelector('#float-layer');
     this.pres = new BattlePresentation(this.arena, floatLayer);
     this.pres.resetEvents(this.match);
+    this.pres.onBusyChange = () => this._syncActionChromeVisibility();
 
     // Presentation tick
     const tick = () => {
@@ -633,10 +630,32 @@ export class GameApp {
     // Bottom panel: selected unit, else active turn unit
     this._renderBottomUnitPanel(this.inspectId || this.match.activeUnitId);
 
-    // Command bar always visible (Move / Ability / Wait + open submenu)
+    // Command bar when player input needed; hide during presentation
     this._renderCommandBar();
     // After Act only Wait remains → auto-open Wait/Face (visible in fixed chrome)
     this._maybeAutoWaitFace();
+    this._syncActionChromeVisibility();
+  }
+
+  /**
+   * Show/hide stationary action chrome: hidden while anims play; shown when player must act.
+   */
+  _syncActionChromeVisibility() {
+    const chrome = this.screens.querySelector('#battle-action-chrome');
+    if (!chrome || !this.match) return;
+    const active = getUnit(this.match, this.match.activeUnitId);
+    const canControl =
+      this.match.phase === 'battle' && !!active && this._canControl(active) && !this.pres?.busy;
+    const show = shouldShowActionChrome({
+      busy: !!this.pres?.busy,
+      canControl,
+      phase: this.match.phase,
+      uiMode: this.uiMode,
+    });
+    chrome.classList.toggle('is-hidden', !show);
+    chrome.classList.toggle('hidden', !show);
+    if (show) chrome.removeAttribute('hidden');
+    else chrome.setAttribute('hidden', '');
   }
 
   /**
@@ -661,8 +680,7 @@ export class GameApp {
   }
 
   /**
-   * Move / Ability / Wait always visible on controllable turns; submenu stays mounted.
-   * Mounted in fixed #battle-action-chrome (right hover) so mobile never scrolls for actions.
+   * Move / Ability / Wait when player can act; mounted in #battle-action-chrome.
    */
   _renderCommandBar() {
     const actEl = this.screens.querySelector('#hud-actions');
@@ -673,8 +691,15 @@ export class GameApp {
     const canControl =
       this.match.phase === 'battle' && active && this._canControl(active) && !this.pres?.busy;
 
+    // During presentation or enemy phase: clear chrome content (visibility handled separately)
+    if (!canControl) {
+      actEl.innerHTML = '';
+      waitFace?.classList.add('hidden');
+      this._syncActionChromeVisibility();
+      return;
+    }
+
     if (this.uiMode === 'wait-face') {
-      // Keep primary actions visible above wait-face
       actEl.innerHTML = `
         <div class="cmd-row">
           <button type="button" id="act-move" class="btn small" disabled>Move</button>
@@ -684,28 +709,11 @@ export class GameApp {
         <div id="ability-list" class="ability-list"></div>
       `;
       this._renderWaitFaceUi();
+      this._syncActionChromeVisibility();
       return;
     }
 
     waitFace?.classList.add('hidden');
-
-    if (!canControl) {
-      if (this.match.phase === 'battle' && active?.team === TEAMS.ENEMY && this.match.mode === 'ai') {
-        actEl.innerHTML = `<em class="enemy-phase">Enemy phase…</em>
-          <div class="cmd-row muted">
-            <button type="button" class="btn small" disabled>Move</button>
-            <button type="button" class="btn small" disabled>Ability</button>
-            <button type="button" class="btn small" disabled>Wait</button>
-          </div>`;
-      } else {
-        actEl.innerHTML = `<div class="cmd-row muted">
-            <button type="button" class="btn small" disabled>Move</button>
-            <button type="button" class="btn small" disabled>Ability</button>
-            <button type="button" class="btn small" disabled>Wait</button>
-          </div>`;
-      }
-      return;
-    }
 
     const moveOn = this.uiMode === 'move' ? 'primary' : '';
     const actOn = this.uiMode === 'pick-ability' || this.uiMode === 'act' ? 'primary' : '';
@@ -722,13 +730,13 @@ export class GameApp {
     actEl.querySelector('#act-act').onclick = () => this.enterActMode();
     actEl.querySelector('#act-wait').onclick = () => this.enterWaitFace();
 
-    // Restore open submenu if still targeting
     if (this.uiMode === 'pick-ability' || this.uiMode === 'act') {
       this._populateAbilityList(active);
       if (this.uiMode === 'act' && this.selectedAbility) {
         this._showAbilityRange(active, this.selectedAbility);
       }
     }
+    this._syncActionChromeVisibility();
   }
 
   openInspect(unitId) {
@@ -1023,28 +1031,29 @@ export class GameApp {
       }
       return;
     }
-    // Serialize actions while presentation is busy — prevent stacked skip/teleport
-    if (this.pres?.busy) {
-      await this.pres._playTail.catch(() => {});
+    // Always wait for prior presentation before applying the next action
+    if (this.pres) {
+      await this.pres.waitUntilIdle();
     }
-    const evBefore = this.match.events?.length || 0;
+    this._syncActionChromeVisibility();
+
     const r = applyAction(this.match, action);
     if (!r.ok) {
       this.toast(r.error || 'Illegal');
       return;
     }
 
-    // All presentation via playEventsSinceCursor only (never consumeEvents — that teleports)
+    // playEventsSinceCursor claims its event slice immediately — do not rewind cursor
     if (this.pres) {
-      this.pres._eventCursor = Math.min(evBefore, this.match.events?.length || 0);
+      this._syncActionChromeVisibility();
       await this.pres.playEventsSinceCursor(this.match, WALK_MS_PER_STEP);
     }
 
     if (this.match.mode === 'ai') {
-      const ev0 = this.match.events?.length || 0;
+      if (this.pres) await this.pres.waitUntilIdle();
       playEnemyTurns(this.match, this.difficulty);
       if (this.pres) {
-        this.pres._eventCursor = Math.min(ev0, this.match.events?.length || 0);
+        this._syncActionChromeVisibility();
         await this.pres.playEventsSinceCursor(this.match, WALK_MS_PER_STEP);
       }
     }
@@ -1136,8 +1145,8 @@ export class GameApp {
       const seat = msg.room.seats.find((s) => s.id === this.clientId);
       if (seat) this.onlineTeam = seat.team;
       if (msg.room.match) {
-        const prevEventLen = this.match?.events?.length || 0;
         const prevMatchId = this.match?.id;
+        const prevCursor = this.pres?._eventCursor ?? 0;
         this.match = msg.room.match;
         if (this.mode !== 'battle') {
           this.mode = 'battle';
@@ -1148,10 +1157,14 @@ export class GameApp {
             await this.pres.playEventsSinceCursor(this.match, WALK_MS_PER_STEP);
           }
         } else if (this.pres) {
-          if (this.match.id === prevMatchId) {
-            this.pres._eventCursor = Math.min(prevEventLen, this.match.events?.length || 0);
-          } else {
+          await this.pres.waitUntilIdle();
+          if (this.match.id !== prevMatchId) {
             this.pres.resetEvents({ events: [] });
+          } else if (this.pres._eventCursor > (this.match.events?.length || 0)) {
+            this.pres._eventCursor = 0;
+          } else {
+            // Keep claimed cursor — never rewind below what we already played
+            this.pres._eventCursor = Math.max(prevCursor, this.pres._eventCursor);
           }
           await this.pres.playEventsSinceCursor(this.match, WALK_MS_PER_STEP);
         }

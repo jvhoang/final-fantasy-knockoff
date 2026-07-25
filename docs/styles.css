@@ -825,7 +825,7 @@ select {
   display: none;
 }
 
-/* Fixed floating action chrome — always on-screen (esp. iPhone) */
+/* Fixed floating action chrome — semi-transparent so arena shows through */
 .battle-action-chrome {
   position: absolute;
   right: 0.4rem;
@@ -839,6 +839,16 @@ select {
   flex-direction: column;
   gap: 0.35rem;
   pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.18s ease;
+}
+
+.battle-action-chrome.is-hidden,
+.battle-action-chrome[hidden],
+.battle-action-chrome.hidden {
+  opacity: 0 !important;
+  visibility: hidden;
+  pointer-events: none !important;
 }
 
 .battle-action-chrome .hud-block,
@@ -848,10 +858,11 @@ select {
 
 .chrome-actions,
 .chrome-wait-face {
-  background: rgba(8, 22, 28, 0.92);
-  border: 1px solid var(--accent);
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(6px);
+  /* Semi-transparent panels — arena remains partially visible */
+  background: rgba(8, 22, 28, 0.48);
+  border: 1px solid rgba(62, 207, 191, 0.55);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(5px);
 }
 
 .chrome-wait-face {
@@ -868,6 +879,16 @@ select {
 }
 
 /* Formation chip pickers — primary equip UI without page scroll */
+.loadout-meta-row {
+  margin-top: 0.35rem;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.loadout-meta-row .inline-field select {
+  max-width: 8.5rem;
+}
+
 .loadout-chip-pickers {
   margin-top: 0.5rem;
   display: flex;
